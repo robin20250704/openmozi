@@ -1,0 +1,97 @@
+{
+    "name": "mozi-bot",
+    "version": "1.12.0",
+    "description": "鏀寔鍥戒骇妯″瀷鍜屽浗浜ч€氳杞欢鐨勬櫤鑳藉姪鎵嬫満鍣ㄤ汉",
+    "main": "dist/index.js",
+    "types": "dist/index.d.ts",
+    "type": "module",
+    "bin": {
+        "mozi": "./dist/cli/index.js"
+    },
+    "files": [
+        "dist/**",
+        "README.md",
+        "LICENSE"
+    ],
+    "scripts": {
+        "build": "tsc",
+        "ci": "node scripts/ci.mjs",
+        "ci:check": "node scripts/ci.mjs --check",
+        "deploy": "node scripts/ci.mjs --no-e2e",
+        "hooks:install": "node scripts/install-hooks.mjs",
+        "dev": "tsx watch src/cli/index.ts",
+        "start": "node dist/cli/index.js start",
+        "start:gateway": "tsx src/gateway/server.ts",
+        "cli": "node dist/cli/index.js",
+        "lint": "eslint src --ext .ts",
+        "test": "vitest",
+        "prepublishOnly": "npm run build"
+    },
+    "keywords": [
+        "chatbot",
+        "ai",
+        "llm",
+        "deepseek",
+        "minimax",
+        "kimi",
+        "moonshot",
+        "stepfun",
+        "feishu",
+        "dingtalk",
+        "qq",
+        "lark",
+        "chinese",
+        "agent"
+    ],
+    "author": "King-Chau",
+    "license": "Apache-2.0",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/King-Chau/mozi.git"
+    },
+    "homepage": "https://github.com/King-Chau/mozi#readme",
+    "bugs": {
+        "url": "https://github.com/King-Chau/mozi/issues"
+    },
+    "dependencies": {
+        "@larksuiteoapi/node-sdk": "^1.56.1",
+        "@mariozechner/pi-agent-core": "^0.73.1",
+        "@mariozechner/pi-ai": "^0.73.1",
+        "@mariozechner/pi-coding-agent": "^0.73.1",
+        "@sinclair/typebox": "^0.34.48",
+        "@xenova/transformers": "^2.17.2",
+        "axios": "^1.13.4",
+        "chalk": "^5.3.0",
+        "commander": "^12.1.0",
+        "crypto-js": "^4.2.0",
+        "dingtalk-stream": "^2.1.4",
+        "dotenv": "^16.4.5",
+        "express": "^4.21.0",
+        "glob": "^13.0.0",
+        "json5": "^2.2.3",
+        "nanoid": "^5.0.7",
+        "node-cache": "^5.1.2",
+        "onnxruntime-node": "^1.29.0",
+        "pino": "^9.4.0",
+        "pino-pretty": "^11.2.2",
+        "playwright-core": "^1.58.0",
+        "qq-guild-bot": "^2.9.5",
+        "ws": "^8.18.0",
+        "yaml": "^2.5.1",
+        "zod": "^3.23.8"
+    },
+    "devDependencies": {
+        "@playwright/test": "^1.58.0",
+        "@types/crypto-js": "^4.2.2",
+        "@types/express": "^4.17.21",
+        "@types/glob": "^8.1.0",
+        "@types/node": "^22.7.4",
+        "@types/ws": "^8.5.12",
+        "tsx": "^4.19.1",
+        "typescript": "^5.6.2",
+        "vitest": "^2.1.1"
+    },
+    "engines": {
+        "node": ">=18.0.0"
+    }
+}

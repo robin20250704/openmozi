@@ -1,0 +1,10 @@
+{
+  "id": "junwuyou",
+  "name": "君无忧 AI 客服",
+  "version": "1.0.0",
+  "description": "君无忧消杀服务多渠道 AI 客服：FAQ 5 级智能搜索 + 订单/排程/红线 + 全量审计",
+  "main": "index.js",
+  "kind": "tools",
+  "author": "creature",
+  "tags": ["junwuyou", "customer-service", "faq-search", "scheduler"]
+}

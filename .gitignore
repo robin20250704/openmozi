@@ -1,0 +1,34 @@
+node_modules/
+dist/
+dist.bak/
+junwuyou/node_modules/
+.env
+.env.local
+*.log
+.reconnect-key
+.pi/
+.DS_Store
+coverage/
+.idea/
+.vscode/
+*.tgz
+config.local.json5
+config.local.json5.*
+*.bak
+.claude/
+
+# Docker
+.dockerignore
+
+# 调试/回归脚本(本地一次性使用,不入 fork)
+debug-*.mjs
+test-*.mjs
+test-*.jsonl
+verify-*.mjs
+fix-tool-exec.mjs
+pi-anthropic-patch.mjs
+prompt-junwuyou.mjs
+junwuyou-launcher.mjs
+ci.mjs
+scripts/verify-p*.mjs
+package-lock.json
