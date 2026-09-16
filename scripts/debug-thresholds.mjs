@@ -2,8 +2,8 @@
 // 目的：确定"该问题与最相似 FAQ"的分数分布，据此定阈值（宁严勿漏）
 import { config as loadDotenv } from "dotenv";
 loadDotenv();
-const { query } = await import("../junwuyou/lib/pg-client.js");
-const { getEmbedder } = await import("../junwuyou/lib/embedding.js");
+const { query } = await import("../agents/junwuyou/lib/pg-client.js");
+const { getEmbedder } = await import("../agents/junwuyou/lib/embedding.js");
 
 const emb = await getEmbedder();
 if (!emb) { console.error("embedder 不可用"); process.exit(1); }

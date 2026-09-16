@@ -10,8 +10,8 @@
 import { config as loadDotenv } from "dotenv";
 loadDotenv();
 
-const { faqSearch, faqHealthCheck } = await import("../junwuyou/lib/faq-search-engine.js");
-const { getEmbedder, getReranker } = await import("../junwuyou/lib/embedding.js");
+const { faqSearch, faqHealthCheck } = await import("../agents/junwuyou/lib/faq-search-engine.js");
+const { getEmbedder, getReranker } = await import("../agents/junwuyou/lib/embedding.js");
 
 let pass = 0;
 let fail = 0;

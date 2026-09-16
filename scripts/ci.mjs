@@ -123,7 +123,7 @@ const walkJs = (dir, acc = []) => {
   }
   return acc;
 };
-for (const p of walkJs(path.join(ROOT, "junwuyou")).filter((f) => !f.includes("node_modules"))) CHECK_FILES.push(path.relative(ROOT, p));
+for (const p of walkJs(path.join(ROOT, "agents", "junwuyou")).filter((f) => !f.includes("node_modules"))) CHECK_FILES.push(path.relative(ROOT, p));
 const syntaxBad = [];
 for (const rel of CHECK_FILES) {
   const r2 = spawnSync(process.execPath, ["--check", rel], { cwd: ROOT, encoding: "utf8" });

@@ -21,15 +21,15 @@ setLogger(createLogger({ level: "warn" }));
 
 // —— 与 launcher 一致：注册 9 个 custom tools ——
 const tools = await Promise.all([
-  import("../junwuyou/tools/faq-search.js"),
-  import("../junwuyou/tools/query-pricing.js"),
-  import("../junwuyou/tools/propose-slots.js"),
-  import("../junwuyou/tools/create-appointment.js"),
-  import("../junwuyou/tools/cancel-appointment.js"),
-  import("../junwuyou/tools/get-customer-appointments.js"),
-  import("../junwuyou/tools/query-customer-profile.js"),
-  import("../junwuyou/tools/update-collected-info.js"),
-  import("../junwuyou/tools/request-admin-approval.js"),
+  import("../agents/junwuyou/tools/faq-search.js"),
+  import("../agents/junwuyou/tools/query-pricing.js"),
+  import("../agents/junwuyou/tools/propose-slots.js"),
+  import("../agents/junwuyou/tools/create-appointment.js"),
+  import("../agents/junwuyou/tools/cancel-appointment.js"),
+  import("../agents/junwuyou/tools/get-customer-appointments.js"),
+  import("../agents/junwuyou/tools/query-customer-profile.js"),
+  import("../agents/junwuyou/tools/update-collected-info.js"),
+  import("../agents/junwuyou/tools/request-admin-approval.js"),
 ]);
 const customTools = tools.map((m) => Object.values(m)[0]);
 

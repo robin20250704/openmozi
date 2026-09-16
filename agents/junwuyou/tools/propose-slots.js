@@ -62,6 +62,10 @@ export const proposeSlotsTool = {
 
     const req = { ...params, preferred_date: date };
     delete req.wish_time;
+    // P3 验证发现的潜在 bug：service_slots 之前只用于本地算 wishEnd，从不显式入 req，
+    // 调度器（35801 /schedule/propose）把它当必填 → LLM 没传时就 422 "missing field service_slots"。
+    // 这里显式带上（默认 2=1小时，与参数声明一致），不再依赖 LLM 是否传。
+    req.service_slots = duration;
     if (wishStart != null) req.wish_start = wishStart;
     if (wishEnd != null) req.wish_end = wishEnd;
 

@@ -19,7 +19,7 @@ import fs from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
-import { resolveApiToken } from '../junwuyou/lib/root-env.js';
+import { resolveApiToken } from '../agents/junwuyou/lib/root-env.js';
 
 const ROOT = path.resolve(import.meta.dirname, '..', '..', '..');
 const QUICK = process.argv.includes('--quick');

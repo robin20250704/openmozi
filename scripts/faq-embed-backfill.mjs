@@ -14,8 +14,8 @@ import { config as loadDotenv } from "dotenv";
 loadDotenv();
 
 // L-042 同族：pg-client / embedding 读模块级 env，必须在 dotenv 之后动态 import
-const { query, getPool } = await import("../junwuyou/lib/pg-client.js");
-const { getEmbedder } = await import("../junwuyou/lib/embedding.js");
+const { query, getPool } = await import("../agents/junwuyou/lib/pg-client.js");
+const { getEmbedder } = await import("../agents/junwuyou/lib/embedding.js");
 
 const FORCE = process.argv.includes("--force");
 

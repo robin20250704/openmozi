@@ -1,8 +1,8 @@
 // debug-query-robustness.mjs — 阈值对不同问法（自然句 vs 模型扩展的关键词串）的稳健性
 import { config as loadDotenv } from "dotenv";
 loadDotenv();
-const { query } = await import("../junwuyou/lib/pg-client.js");
-const { getEmbedder } = await import("../junwuyou/lib/embedding.js");
+const { query } = await import("../agents/junwuyou/lib/pg-client.js");
+const { getEmbedder } = await import("../agents/junwuyou/lib/embedding.js");
 
 const emb = await getEmbedder();
 const { rows: faqs } = await query(`SELECT id, question FROM faq_items ORDER BY id`);

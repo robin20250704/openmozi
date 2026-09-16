@@ -357,7 +357,7 @@ async function main() {
 
   // ================= V-014 跨实现对齐（slot ⇄ 时钟时间） =================
   section('V-014 对齐断言：作业层 slot 换算 ⇄ 客服侧唯一实现（逐点比对）');
-  const agentSlotMod = await import(pathToFileURL(path.join(ROOT, 'runtime', 'openmozi', 'junwuyou', 'lib', 'slot-time.js')).href);
+  const agentSlotMod = await import(pathToFileURL(path.join(ROOT, 'runtime', 'openmozi', 'agents', 'junwuyou', 'lib', 'slot-time.js')).href);
   const workerSlotMod = (await import(pathToFileURL(path.join(ROOT, 'junwuyou', 'server', 'worker', 'slot-time.js')).href)).default;
   const mismatches = [];
   for (let s = 0; s <= 48; s++) {

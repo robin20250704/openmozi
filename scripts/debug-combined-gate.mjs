@@ -3,8 +3,8 @@
 // 需要用 reranker 分数作为最终判定。此脚本量化两者各自的分离区间。
 import { config as loadDotenv } from "dotenv";
 loadDotenv();
-const { query } = await import("../junwuyou/lib/pg-client.js");
-const { getEmbedder, getReranker } = await import("../junwuyou/lib/embedding.js");
+const { query } = await import("../agents/junwuyou/lib/pg-client.js");
+const { getEmbedder, getReranker } = await import("../agents/junwuyou/lib/embedding.js");
 
 const emb = await getEmbedder();
 const rr = await getReranker();

@@ -22,7 +22,7 @@ import fs from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
-import { resolveApiToken, ROOT_ENV_PATH } from '../junwuyou/lib/root-env.js';
+import { resolveApiToken, ROOT_ENV_PATH } from '../agents/junwuyou/lib/root-env.js';
 
 // scripts/ → openmozi → runtime → 仓库根
 const ROOT = path.resolve(import.meta.dirname, '..', '..', '..');

@@ -254,7 +254,7 @@ export class AgentRuntime {
 
   /** 动态加载 junwuyou 业务库（纯 JS，不参与 tsc 编译，故用变量路径避免类型解析） */
   private async loadBusinessLib(name: string): Promise<any> {
-    const spec = `../../junwuyou/lib/${name}.js`;
+    const spec = `../../agents/junwuyou/lib/${name}.js`;
     return await import(spec);
   }
 

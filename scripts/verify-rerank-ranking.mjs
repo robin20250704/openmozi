@@ -2,8 +2,8 @@
 // 目的：① 验证 L4+L5 的端到端排序质量 ② 用实测分布定 L5 阈值（不拍脑袋）
 import { config as loadDotenv } from "dotenv";
 loadDotenv();
-const { query } = await import("../junwuyou/lib/pg-client.js");
-const { getEmbedder, getReranker } = await import("../junwuyou/lib/embedding.js");
+const { query } = await import("../agents/junwuyou/lib/pg-client.js");
+const { getEmbedder, getReranker } = await import("../agents/junwuyou/lib/embedding.js");
 
 const emb = await getEmbedder();
 const rr = await getReranker();

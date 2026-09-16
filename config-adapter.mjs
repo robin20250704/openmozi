@@ -9,7 +9,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
-import { readRootEnvKey } from "./junwuyou/lib/root-env.js";
+import { readRootEnvKey } from "./agents/junwuyou/lib/root-env.js";
 
 /**
  * 读仓库根 `.env` 的键（P0 安全专项：token 的**唯一配置处**是根 `.env`，

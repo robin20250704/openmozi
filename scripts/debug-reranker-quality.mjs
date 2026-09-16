@@ -1,7 +1,7 @@
 // debug-reranker-quality.mjs — 验证 bge-reranker-base 的判别力（明确相关 vs 明确不相关）
 import { config as loadDotenv } from "dotenv";
 loadDotenv();
-const { getReranker } = await import("../junwuyou/lib/embedding.js");
+const { getReranker } = await import("../agents/junwuyou/lib/embedding.js");
 
 const rr = await getReranker();
 if (!rr) { console.error("reranker 不可用"); process.exit(1); }

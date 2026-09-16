@@ -1,7 +1,7 @@
 // scripts/probe-pricing-slots.mjs — 诊断：核实报价规则与 slot 语义（需求 4）
 // 用 Node fetch 而不是 PowerShell Invoke-WebRequest：后者在 Windows 上对 body 的
 // 中文编码不可控（实测把「白蚁」变成 "??"），会造出假缺陷。
-import { resolveApiToken } from "../junwuyou/lib/root-env.js";
+import { resolveApiToken } from "../agents/junwuyou/lib/root-env.js";
 
 const BASE = process.env.SCHEDULER_API_URL || "http://127.0.0.1:35801";
 // P0（D-24）：/schedule/* 需要分组 token；诊断脚本从进程环境或仓库根 .env 取，缺则显式提示。

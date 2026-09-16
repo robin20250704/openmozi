@@ -18,12 +18,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const HERE = path.dirname(fileURLToPath(import.meta.url)); // runtime/openmozi/junwuyou/lib
+const HERE = path.dirname(fileURLToPath(import.meta.url)); // runtime/openmozi/agents/junwuyou/lib
 
-/** 根 `.env` 路径（可被环境变量覆盖） */
+/** 根 `.env` 路径（可被环境变量覆盖）。P3 搬迁：junwuyou/ → agents/junwuyou/ 多了一层，上溯 5 级到仓库根。 */
 export const ROOT_ENV_PATH =
   process.env.SERVICE_ENV_FILE || process.env.AMAP_ENV_FILE ||
-  path.resolve(HERE, '..', '..', '..', '..', '.env');
+  path.resolve(HERE, '..', '..', '..', '..', '..', '.env');
 
 /** 从根 `.env` 读单个键（找不到/不可读返回 ''） */
 export function readRootEnvKey(name) {
