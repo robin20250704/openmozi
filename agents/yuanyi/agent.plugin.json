@@ -1,0 +1,18 @@
+{
+  "id": "yuanyi",
+  "name": "元一电子 AI 客服（小元）",
+  "promptRef": "prompt.md",
+  "toolsModule": "tools/index.js",
+  "libDir": "agents/yuanyi/lib",
+  "dataDomain": "yuanyi",
+  "allowedOrigins": [
+    "http://127.0.0.1:53100"
+  ],
+  "toolset": [
+    "query_sku",
+    "quote_price",
+    "search_faq"
+  ],
+  "accountRoutes": [],
+  "note": "accountRoutes 是**空的**：本 agent 接管的渠道账号由 runtime/openmozi/.env 的 AGENT_ROUTES（运维面）给出，形如 qq:<appId>——描述符里写死 appId 会在换账号/换环境时变成第二个真相源。allowedOrigins 只含元一自己的业务后端（53100）——君无忧的 53000/35801 不在列，工具打过去会被 E_DATA_DOMAIN_VIOLATION 拒绝（数据隔离 A16）。"
+}

@@ -135,6 +135,14 @@ export interface InboundMessageContext {
   mentions?: string[];
   timestamp: number;
   raw?: unknown;
+  /**
+   * 渠道账号路由键（P4 契约 C-P4-1）：`<channelId>:<accountId>`，如 `qq:1905601942`。
+   *
+   * 由**渠道实例**按其账号标识注入（同一渠道可有多账号 → 多个实例）。
+   * 网关据此选 agent（D13：不同渠道账号 → 不同 agent）与选回投通道实例。
+   * **缺失/未命中 → 走默认 agent**（单 agent 时代行为不变，U-4 回滚前提）。
+   */
+  agentRoute?: string;
 }
 
 /** 出站消息 */
@@ -179,6 +187,11 @@ export interface QQConfig {
   enabled?: boolean;
   /** 是否使用沙箱环境 */
   sandbox?: boolean;
+  /**
+   * 账号标识（P4 多账号）：作为 `agentRoute = qq:<account>` 的账号段。
+   * 缺省回退 `appId`（单账号配置零改动），多账号配置里显式给（便于用别名而不是长数字）。
+   */
+  account?: string;
 }
 
 /** 企业微信配置 */
@@ -268,6 +281,16 @@ export interface MoziConfig {
     qq?: QQConfig;
     wecom?: WeComConfig;
     email?: EmailConfig;
+    /**
+     * 同类型渠道的**附加账号**（P4 / D13）：每个元素 = 一个独立通道实例，
+     * 各自 `agentRoute = <channelId>:<account>`，路由到各自的 agent。
+     * 缺省空数组 = 只有主账号（线上现状，零影响）。
+     */
+    accounts?: {
+      qq?: QQConfig[];
+      wecom?: Array<WeComConfig & { account?: string }>;
+      email?: Array<EmailConfig & { account?: string }>;
+    };
   };
   agent: AgentConfig;
   server: {

@@ -123,7 +123,15 @@ const walkJs = (dir, acc = []) => {
   }
   return acc;
 };
-for (const p of walkJs(path.join(ROOT, "agents", "junwuyou")).filter((f) => !f.includes("node_modules"))) CHECK_FILES.push(path.relative(ROOT, p));
+// P4：所有业务 agent 插件目录都要自检（不只 junwuyou）——新增 agent 时不能漏掉语法门
+const AGENT_DIRS = fs.readdirSync(path.join(ROOT, "agents"), { withFileTypes: true })
+  .filter((e) => e.isDirectory())
+  .map((e) => e.name);
+for (const agent of AGENT_DIRS) {
+  for (const p of walkJs(path.join(ROOT, "agents", agent)).filter((f) => !f.includes("node_modules"))) {
+    CHECK_FILES.push(path.relative(ROOT, p));
+  }
+}
 const syntaxBad = [];
 for (const rel of CHECK_FILES) {
   const r2 = spawnSync(process.execPath, ["--check", rel], { cwd: ROOT, encoding: "utf8" });
@@ -289,6 +297,12 @@ runNode("scripts/verify-p07-admin.mjs", "P0.7 断言（隔离实例 + 线上态�
 // 这组断言的价值在于**跨渠道汇聚**：单渠道断言全绿也发现不了"会话键没按客户汇聚"。
 step("5f/5 客户身份汇聚 + 邮件渠道验收（P0.6：A25–A29 + 部署态探针）");
 runNode("scripts/verify-p06-identity.mjs", "身份汇聚/邮件渠道断言（A25–A29）", []);
+
+// P4 多 agent + 三域隔离（A6/A10–A18/A19–A25）：隔离实例 + 临时 sessionDir + 临时业务后端，
+// 不碰生产库、不重启线上。多 agent 同进程时的**域串号**（后装配者覆盖前者的白名单）只有这组
+// 断言能发现——它曾让线上报价链路整条断掉，而单 agent 回归全绿。
+step("5g/5 多 agent 隔离验收（P4：A6/A10–A25）");
+runNode("scripts/verify-p4-isolation.mjs", "多 agent 三域隔离断言（P4）", []);
 
 const s = readStamp();
 log(`\n${"─".repeat(52)}`);

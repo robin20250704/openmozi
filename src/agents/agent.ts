@@ -180,7 +180,7 @@ export class Agent {
 }
 
 /** 创建 Agent */
-export async function createAgent(config: MoziConfig): Promise<Agent> {
+export async function createAgent(config: MoziConfig, opts?: { runtime?: AgentRuntime }): Promise<Agent> {
   let memoryManager: MemoryManager | undefined;
   if (config.memory?.enabled !== false && config.memory) {
     const { createMemoryManager } = await import("../memory/index.js");
@@ -191,8 +191,9 @@ export async function createAgent(config: MoziConfig): Promise<Agent> {
     logger.info({ directory: config.memory.directory }, "Memory system initialized");
   }
 
-  // 创建 runtime
-  const runtime = createAgentRuntime(config);
+  // 创建 runtime（P4：多 agent 装配器可传入已配好的 runtime —— 否则会出现"两个 runtime
+  // 各持一套会话/runtime 工具表"，被丢弃的那个白建还污染日志）
+  const runtime = opts?.runtime ?? createAgentRuntime(config);
 
   // 设置 cron 执行器
   const agentExecutor = async (params: {

@@ -1,0 +1,27 @@
+{
+  "id": "junwuyou",
+  "name": "君无忧 AI 客服（小君）",
+  "promptRef": "prompt.md",
+  "toolsModule": "tools/index.js",
+  "libDir": "agents/junwuyou/lib",
+  "dataDomain": "junwuyou",
+  "allowedOrigins": [
+    "http://127.0.0.1:53000",
+    "http://127.0.0.1:35801"
+  ],
+  "toolset": [
+    "faq_search",
+    "query_pricing",
+    "propose_slots",
+    "create_appointment",
+    "cancel_appointment",
+    "get_customer_appointments",
+    "query_customer_profile",
+    "update_collected_info",
+    "request_admin_approval",
+    "confirm_order_details",
+    "get_current_time"
+  ],
+  "accountRoutes": [],
+  "note": "accountRoutes 由 runtime/openmozi/.env 的 AGENT_ROUTES 或本字段声明；P4 期由 env 驱动（运维面），本字段保留给'代码面固定'的场景。allowedOrigins = 君无忧业务后端（Express 53000）+ 调度器（Rust 35801）——本 agent 的工具不得访问这两个之外的服务。"
+}

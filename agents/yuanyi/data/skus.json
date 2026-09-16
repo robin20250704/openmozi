@@ -1,0 +1,278 @@
+{
+  "_说明": "元一电子 · SKU 样本数据（P4 最小形态：仅用于证明'第二个 agent 用自己的数据应答'与物理数据隔离；完整 SKU 库与报价策略引擎属 P5，见 spec-p4.md §十）。",
+  "_数据边界": "本文件是 P5 的输入形态示范：字段按元器件行业惯例设计（型号/品牌/封装/最小包装/交期/替代料/分类），价格为本项目自维护基准价（D17：不与原厂目录价耦合）。",
+  "meta": {
+    "merchant": "元一电子",
+    "merchant_id": "yuanyi",
+    "currency": "CNY",
+    "updated_at": "2026-09-16",
+    "sample_data": true,
+    "note": "型号与包装为行业真实形态，价格是示例基准价（非真实报价），P5 上线前须由元一提供实际数据替换。"
+  },
+  "customer_levels": {
+    "A": { "name": "A 级（战略客户）", "discount": 0.82, "note": "年采购额大、长期合作，享最高折扣" },
+    "B": { "name": "B 级（常规客户）", "discount": 0.9, "note": "稳定复购" },
+    "C": { "name": "C 级（散单/新客）", "discount": 1.0, "note": "按基准价，无折扣" }
+  },
+  "skus": [
+    {
+      "part_no": "1-1734592-2",
+      "brand": "TE Connectivity",
+      "family": "AMPMODU / 板对线连接器",
+      "description": "2.54mm 间距 双排 20 位 母端胶壳（压接式）",
+      "package": "袋装",
+      "moq": 100,
+      "pack_multiple": 100,
+      "lead_time_days": 7,
+      "stock": 3200,
+      "base_price": 3.86,
+      "currency": "CNY",
+      "tier_prices": [
+        { "min_qty": 100, "max_qty": 499, "price": 3.86 },
+        { "min_qty": 500, "max_qty": 1999, "price": 3.52 },
+        { "min_qty": 2000, "max_qty": null, "price": 3.18 }
+      ],
+      "float_ref": { "index": "铜价", "factor": 0.06, "min_delta": -0.15, "max_delta": 0.35, "valid_until": "2026-10-15" },
+      "alternatives": ["1-1734592-3", "1-1734592-5"],
+      "keywords": ["1734592", "2.54排母", "20pin母端", "双排母", "AMPmodu", "板对线"]
+    },
+    {
+      "part_no": "1-1734592-3",
+      "brand": "TE Connectivity",
+      "family": "AMPmodu / 板对线连接器",
+      "description": "2.54mm 间距 双排 24 位 母端胶壳（压接式）",
+      "package": "袋装",
+      "moq": 100,
+      "pack_multiple": 100,
+      "lead_time_days": 7,
+      "stock": 1450,
+      "base_price": 4.42,
+      "currency": "CNY",
+      "tier_prices": [
+        { "min_qty": 100, "max_qty": 499, "price": 4.42 },
+        { "min_qty": 500, "max_qty": 1999, "price": 4.05 },
+        { "min_qty": 2000, "max_qty": null, "price": 3.71 }
+      ],
+      "float_ref": { "index": "铜价", "factor": 0.06, "min_delta": -0.15, "max_delta": 0.35, "valid_until": "2026-10-15" },
+      "alternatives": ["1-1734592-2"],
+      "keywords": ["1734592", "2.54排母", "24pin母端", "双排母"]
+    },
+    {
+      "part_no": "1-1734592-5",
+      "brand": "TE Connectivity",
+      "family": "AMPmodu / 板对线连接器",
+      "description": "2.54mm 间距 双排 30 位 母端胶壳（压接式）",
+      "package": "袋装",
+      "moq": 100,
+      "pack_multiple": 100,
+      "lead_time_days": 10,
+      "stock": 620,
+      "base_price": 5.15,
+      "currency": "CNY",
+      "tier_prices": [
+        { "min_qty": 100, "max_qty": 499, "price": 5.15 },
+        { "min_qty": 500, "max_qty": 1999, "price": 4.78 },
+        { "min_qty": 2000, "max_qty": null, "price": 4.4 }
+      ],
+      "alternatives": ["1-1734592-2", "1-1734592-3"],
+      "keywords": ["1734592", "2.54排母", "30pin母端"]
+    },
+    {
+      "part_no": "1-215464-0",
+      "brand": "TE Connectivity",
+      "family": "RJ / 电信连接器",
+      "description": "RJ45 8P8C 直角 通孔 屏蔽 插座（带 LED）",
+      "package": "托盘",
+      "moq": 50,
+      "pack_multiple": 50,
+      "lead_time_days": 12,
+      "stock": 260,
+      "base_price": 12.6,
+      "currency": "CNY",
+      "tier_prices": [
+        { "min_qty": 50, "max_qty": 249, "price": 12.6 },
+        { "min_qty": 250, "max_qty": null, "price": 11.35 }
+      ],
+      "float_ref": { "index": "汇率USDCNY", "factor": 0.03, "min_delta": -0.2, "max_delta": 0.4, "valid_until": "2026-10-01" },
+      "alternatives": ["5-215464-1"],
+      "keywords": ["215464", "RJ45插座", "网口", "8P8C", "带灯"]
+    },
+    {
+      "part_no": "2309410-1",
+      "brand": "TE Connectivity",
+      "family": "导线到板 / 端子",
+      "description": "1.5mm 间距 2 位 直插 针座（压接式，带定位柱）",
+      "package": "卷带",
+      "moq": 2000,
+      "pack_multiple": 2000,
+      "lead_time_days": 15,
+      "stock": 48000,
+      "base_price": 0.62,
+      "currency": "CNY",
+      "tier_prices": [
+        { "min_qty": 2000, "max_qty": 9999, "price": 0.62 },
+        { "min_qty": 10000, "max_qty": 49999, "price": 0.55 },
+        { "min_qty": 50000, "max_qty": null, "price": 0.47 }
+      ],
+      "alternatives": [],
+      "keywords": ["2309410", "1.5mm针座", "2位", "直插", "贴片替代"]
+    },
+    {
+      "part_no": "T4110002041-000",
+      "brand": "TE Connectivity",
+      "family": "圆形连接器 / M12",
+      "description": "M12 A-code 4 芯 母头 直式 屏蔽 现场可接线（IP67）",
+      "package": "单件",
+      "moq": 10,
+      "pack_multiple": 10,
+      "lead_time_days": 20,
+      "stock": 88,
+      "base_price": 46.8,
+      "currency": "CNY",
+      "tier_prices": [
+        { "min_qty": 10, "max_qty": 49, "price": 46.8 },
+        { "min_qty": 50, "max_qty": null, "price": 41.2 }
+      ],
+      "float_ref": { "index": "汇率USDCNY", "factor": 0.03, "min_delta": -0.2, "max_delta": 0.4, "valid_until": "2026-10-01" },
+      "alternatives": ["T4110002051-000"],
+      "keywords": ["M12", "4芯母头", "航空插头", "IP67", "现场接线"]
+    },
+    {
+      "part_no": "207463-1",
+      "brand": "TE Connectivity",
+      "family": "AMPSEAL / 汽车连接器",
+      "description": "AMPSEAL 16 位 母端 护套（防水，带密封圈）",
+      "package": "袋装",
+      "moq": 20,
+      "pack_multiple": 20,
+      "lead_time_days": 25,
+      "stock": 140,
+      "base_price": 38.5,
+      "currency": "CNY",
+      "tier_prices": [
+        { "min_qty": 20, "max_qty": 99, "price": 38.5 },
+        { "min_qty": 100, "max_qty": null, "price": 34.6 }
+      ],
+      "alternatives": ["207464-1"],
+      "keywords": ["AMPSEAL", "207463", "汽车连接器", "防水护套", "16位"]
+    },
+    {
+      "part_no": "926307-3",
+      "brand": "TE Connectivity",
+      "family": "压接端子",
+      "description": "2.54mm 母端 压接端子（卷装，镀金 0.4μm）",
+      "package": "卷装",
+      "moq": 5000,
+      "pack_multiple": 5000,
+      "lead_time_days": 10,
+      "stock": 120000,
+      "base_price": 0.18,
+      "currency": "CNY",
+      "tier_prices": [
+        { "min_qty": 5000, "max_qty": 19999, "price": 0.18 },
+        { "min_qty": 20000, "max_qty": null, "price": 0.15 }
+      ],
+      "float_ref": { "index": "金价", "factor": 0.12, "min_delta": -0.05, "max_delta": 0.08, "valid_until": "2026-09-30" },
+      "alternatives": ["926307-1"],
+      "keywords": ["926307", "压接端子", "母端子", "镀金", "卷装端子"]
+    },
+    {
+      "part_no": "5-104363-1",
+      "brand": "TE Connectivity",
+      "family": "插针针座",
+      "description": "2.54mm 间距 单排 10 位 直插 针座（镀金）",
+      "package": "袋装",
+      "moq": 200,
+      "pack_multiple": 200,
+      "lead_time_days": 7,
+      "stock": 5400,
+      "base_price": 2.35,
+      "currency": "CNY",
+      "tier_prices": [
+        { "min_qty": 200, "max_qty": 999, "price": 2.35 },
+        { "min_qty": 1000, "max_qty": null, "price": 2.08 }
+      ],
+      "alternatives": ["5-104363-2"],
+      "keywords": ["104363", "2.54排针", "10pin", "单排针座"]
+    },
+    {
+      "part_no": "1-215464-9",
+      "brand": "TE Connectivity",
+      "family": "RJ / 电信连接器",
+      "description": "RJ11 6P4C 直角 通孔 插座（无屏蔽）",
+      "package": "托盘",
+      "moq": 100,
+      "pack_multiple": 100,
+      "lead_time_days": 12,
+      "stock": 3100,
+      "base_price": 4.9,
+      "currency": "CNY",
+      "tier_prices": [
+        { "min_qty": 100, "max_qty": 999, "price": 4.9 },
+        { "min_qty": 1000, "max_qty": null, "price": 4.25 }
+      ],
+      "alternatives": ["1-215464-0"],
+      "keywords": ["215464", "RJ11插座", "电话口", "6P4C"]
+    },
+    {
+      "part_no": "284513-1",
+      "brand": "TE Connectivity",
+      "family": "线束/护套组件",
+      "description": "汽车线束 12 腔 连接器组件（含端子，成套）",
+      "package": "套",
+      "moq": 5,
+      "pack_multiple": 5,
+      "lead_time_days": 30,
+      "stock": 24,
+      "base_price": 168.0,
+      "currency": "CNY",
+      "tier_prices": [
+        { "min_qty": 5, "max_qty": 19, "price": 168.0 },
+        { "min_qty": 20, "max_qty": null, "price": 152.0 }
+      ],
+      "alternatives": [],
+      "keywords": ["284513", "线束组件", "12腔", "成套连接器"]
+    },
+    {
+      "part_no": "GT13-1S-HU",
+      "brand": "Hirose",
+      "family": "同轴连接器",
+      "description": "同轴 射频连接器 插头（适配 1.13mm 线，50Ω）",
+      "package": "卷带",
+      "moq": 3000,
+      "pack_multiple": 3000,
+      "lead_time_days": 20,
+      "stock": 26000,
+      "base_price": 0.95,
+      "currency": "CNY",
+      "tier_prices": [
+        { "min_qty": 3000, "max_qty": 11999, "price": 0.95 },
+        { "min_qty": 12000, "max_qty": null, "price": 0.86 }
+      ],
+      "alternatives": [],
+      "keywords": ["GT13", "同轴连接器", "射频插头", "1.13线", "50欧姆"]
+    }
+  ],
+  "faq": [
+    {
+      "q": "最小起订量是多少",
+      "a": "多数型号按包装倍数起订（例如 1-1734592-2 为 100 pcs/袋，2000 pcs/卷的型号按卷起订）。若需要拆包小批量，请说明数量，我让业务同事确认是否可拆。"
+    },
+    {
+      "q": "交期多久",
+      "a": "现货型号常规 7 天内出货；需调货的型号交期见该型号的 lead_time_days 字段（M12/汽车件通常 20-30 天）。急单请说明需求日期，我按可承诺时间回复。"
+    },
+    {
+      "q": "是不是原厂正品",
+      "a": "所有 TE（泰科）与 Hirose 型号均为原厂渠道正品，可提供批次与来源凭证；不接受来路不明的替代料冒充原厂。"
+    },
+    {
+      "q": "能不能开票、付款方式",
+      "a": "可开增值税专用发票。付款方式与账期按客户等级协商（战略客户可申请账期），具体由业务经理确认。"
+    },
+    {
+      "q": "有没有替代型号",
+      "a": "多数型号有同系列替代（见该型号 alternatives 字段）。替代会影响封装、价格与交期，需按图纸/参数确认后再推荐，不建议直接替换。"
+    }
+  ]
+}

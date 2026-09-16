@@ -46,6 +46,11 @@ export class QQChannel extends BaseChannelAdapter {
     this.config = config;
     this.apiClient = new QQApiClient(config);
     this.logger = getChildLogger("qq");
+    // P4（D13）：QQ 的账号标识 = appId（一个 bot 一个 appId）。
+    // 多账号 = 多个 QQChannel 实例，各自 agentRoute = `qq:<appId>`。
+    // config.account 是显式的账号键（多账号配置里可与 appId 不同）；缺省回退 appId 保证
+    // 单账号老配置零改动即获得同一个路由键。
+    this.setAccountId(config.account || config.appId);
   }
 
   /** 初始化通道 */
@@ -80,8 +85,10 @@ export class QQChannel extends BaseChannelAdapter {
     this.wsClient = new QQWebSocketClient(this.config);
 
     // 设置事件处理器
+    // P4：QQWebSocketClient 直接调 eventHandler（不经过 BaseChannelAdapter.handleInboundMessage），
+    // 因此账号路由必须在这里显式注入（`withRoute` 是唯一实现）。
     this.wsClient.setEventHandler(async (context) => {
-      await this.handleInboundMessage(context);
+      await this.handleInboundMessage(this.withRoute(context));
     });
 
     // 启动连接

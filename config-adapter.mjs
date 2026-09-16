@@ -221,15 +221,47 @@ function envToMoziConfig(env) {
   }
 
   // ===== QQ 机器人（官方 API，WebSocket 长连接，无需公网部署）=====
-  // QQConfig: { appId, clientSecret, enabled?, sandbox? }
+  // QQConfig: { appId, clientSecret, enabled?, sandbox?, account? }
   if (env.QQ_ENABLED === "true" && !isPlaceholder(env.QQ_APP_ID)) {
     config.channels.qq = {
       appId: env.QQ_APP_ID,
       clientSecret: env.QQ_CLIENT_SECRET,
       enabled: true,
       sandbox: env.QQ_SANDBOX === "true",
+      // P4（D13）：账号标识 → agentRoute = `qq:<account>`。
+      // 缺省回退 appId（单账号配置零改动即拿到稳定路由键）。
+      account: env.QQ_ACCOUNT || env.QQ_APP_ID,
     };
   }
+
+  // ===== P4：附加渠道账号（多账号 → 多 agent，D13）=====
+  // 约定（确定性，不靠约定俗成）：
+  //   QQ_ACCOUNT<N>_*（N 从 2 起）＝ 第 N 个 QQ 账号；`_ENABLED=true` 且 appId 非占位符才注入。
+  //   account 段（`qq:<account>`）优先用 `QQ_ACCOUNT<N>_ACCOUNT`，缺省用 appId。
+  // 未配置任何附加账号时 `accounts` 为空 → 网关不装配额外通道 → 线上零影响（U-4 回滚前提）。
+  const accounts = { wecom: [], email: [] };
+  const qqAccounts = [];
+  for (let n = 2; n <= 9; n++) {
+    const idKey = `QQ_ACCOUNT${n}_APP_ID`;
+    const secretKey = `QQ_ACCOUNT${n}_CLIENT_SECRET`;
+    const enabled = env[`QQ_ACCOUNT${n}_ENABLED`] === "true";
+    const appId = env[idKey];
+    if (!appId || isPlaceholder(appId)) continue;
+    if (!enabled) {
+      console.log(`[config-adapter] QQ 附加账号 #${n} 已配置 appId 但 QQ_ACCOUNT${n}_ENABLED≠true → 不注入（避免半配置状态）`);
+      continue;
+    }
+    qqAccounts.push({
+      appId,
+      clientSecret: env[secretKey],
+      enabled: true,
+      sandbox: env[`QQ_ACCOUNT${n}_SANDBOX`] === "true",
+      account: env[`QQ_ACCOUNT${n}_ACCOUNT`] || appId,
+    });
+    console.log(`[config-adapter] QQ 附加账号 #${n} → route qq:${env[`QQ_ACCOUNT${n}_ACCOUNT`] || appId}`);
+  }
+  if (qqAccounts.length) accounts.qq = qqAccounts;
+  config.channels.accounts = accounts;
 
   // ===== 邮件渠道（P0.6 自研；D-17/D-21/D-33）=====
   // 与 QQ/企微同一开关语义：只有 EMAIL_ENABLED=true 且账号不是占位符才注入。
@@ -295,6 +327,43 @@ export function loadAndApply(envPath) {
   applyEnvToProcess(env);
   envToPluginEnv(env);
   return { env, moziConfig: envToMoziConfig(env) };
+}
+
+/**
+ * P4：解析多 agent 装配计划（`AGENT_IDS` / `AGENT_ROUTES`）。
+ *
+ * 为什么放在 config-adapter：它属于"配置 → 运行形态"的映射，与渠道账号解析同一层；
+ * 启动器只管按计划装配，不再自己解析配置（避免两处各解析一遍，V-014）。
+ *
+ * - `AGENT_IDS`：装配哪些 agent，**第一个是默认 agent**（缺 route 的消息走它）。
+ *   缺省 `junwuyou`（线上现状：单 agent、行为不变）。
+ * - `AGENT_ROUTES`：`<route>=<agentId>`，逗号分隔；route 形如 `qq:<appId>`。
+ *   缺省只按描述符自己声明的 accountRoutes 走。
+ */
+export function readAgentAssemblyPlan(env = {}) {
+  const idsRaw = String(process.env.AGENT_IDS || env.AGENT_IDS || "junwuyou").trim();
+  const agentIds = idsRaw.split(",").map((s) => s.trim()).filter(Boolean);
+  if (agentIds.length === 0) agentIds.push("junwuyou");
+  for (const id of agentIds) {
+    if (!/^[a-z0-9_-]+$/.test(id)) {
+      throw new Error(`AGENT_IDS 含非法 agentId：${JSON.stringify(id)}（只允许 [a-z0-9_-]）`);
+    }
+  }
+  if (new Set(agentIds).size !== agentIds.length) {
+    throw new Error(`AGENT_IDS 有重复项：${agentIds.join(",")}`);
+  }
+
+  const routesRaw = String(process.env.AGENT_ROUTES || env.AGENT_ROUTES || "").trim();
+  const routes = {};
+  for (const pair of routesRaw.split(",").map((s) => s.trim()).filter(Boolean)) {
+    const i = pair.indexOf("=");
+    if (i <= 0) throw new Error(`AGENT_ROUTES 条目形态应为 <route>=<agentId>，收到 ${JSON.stringify(pair)}`);
+    const route = pair.slice(0, i).trim();
+    const agentId = pair.slice(i + 1).trim();
+    if (!route.includes(":")) throw new Error(`AGENT_ROUTES 的 route 应形如 <channelId>:<accountId>，收到 ${JSON.stringify(route)}`);
+    routes[route] = agentId;
+  }
+  return { agentIds, routes };
 }
 
 export { loadEnv, applyEnvToProcess, envToMoziConfig, envToPluginEnv };

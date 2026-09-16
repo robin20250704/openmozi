@@ -34,3 +34,5 @@ scripts/verify-p*.mjs
 package-lock.json
 # CI/验证产物(会话回放等)
 .verify-sessions/
+# P4: 多 agent 的运行时工作目录(每个 agent 一份 .pi/SYSTEM.md + AGENTS.md,由 launcher 生成)
+.agents/

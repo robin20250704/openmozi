@@ -12,6 +12,9 @@
 // 超时：query/propose 5s；create/cancel 10s
 
 import { requireApiToken } from "./root-env.js";
+// P4 数据域边界（C-P4-5）：本进程属于哪个 agent 的数据域，由 AgentRuntime 在装配时写入；
+// 这里只做"发请求前校验目标 origin"这一步。**无域时放行**（诊断脚本/harness/单测不设域）。
+import { enforceDataOrigin } from "./data-domain.js";
 
 // 默认值修正（P0）：原为 58081 —— 该端口从来没有服务（真实网关端口见根 config.toml
 // [server] port = 35801）。默认值指向死端口＝"配置一丢就静默连错地方"（L-042/L-084 同族）。
@@ -30,7 +33,8 @@ async function businessCall(method, path, body, timeoutMs = 8000) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
-    const res = await fetch(`${JUNWUYOU}${path}`, {
+    // P4：数据域校验（越权即抛 E_DATA_DOMAIN_VIOLATION，fail-closed）
+    const res = await fetch(`${enforceDataOrigin(JUNWUYOU)}${path}`, {
       method,
       headers: { "Content-Type": "application/json; charset=utf-8" },
       body: body ? JSON.stringify(body) : undefined,
@@ -50,7 +54,7 @@ async function call(method, path, body, timeoutMs = 5000) {
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   const start = Date.now();
   try {
-    const res = await fetch(`${BASE}${path}`, {
+    const res = await fetch(`${enforceDataOrigin(BASE)}${path}`, {
       method,
       headers: {
         "Content-Type": "application/json",

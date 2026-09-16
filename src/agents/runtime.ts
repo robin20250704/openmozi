@@ -3,7 +3,8 @@
  * 管理多会话，提供 chat 和 chatStream 接口
  */
 
-import { join } from "path";
+import { join, isAbsolute, resolve as resolvePath, dirname } from "path";
+import { pathToFileURL, fileURLToPath } from "url";
 import * as os from "os";
 import {
   createAgentSession,
@@ -19,6 +20,7 @@ import type { MoziConfig, ProviderId, InboundMessageContext } from "../types/ind
 import { initModelResolver, getApiKeyForProvider } from "../providers/model-resolver.js";
 import { getChildLogger } from "../utils/logger.js";
 import { buildSystemPrompt } from "./system-prompt.js";
+import { setFallbackDataDomain, runWithDataDomain, enterWithDataDomain } from "../core/isolation/data-domain.js";
 import type { SkillsRegistry } from "../skills/index.js";
 import type { MemoryManager } from "../memory/index.js";
 import type { CronService } from "../cron/service.js";
@@ -36,6 +38,20 @@ export interface RuntimeConfig {
   sessionDir?: string;
   memoryManager?: MemoryManager;
   cronService?: CronService;
+  /**
+   * Agent 标识（P4 / C-P4-6）：会话键前缀 + 会话文件名前缀。
+   * 缺省 undefined → 键形态与单 agent 时代**逐字一致**（U-4 回滚前提）。
+   */
+  agentId?: string;
+  /**
+   * 业务 lib 目录（P4 / C-P4-5）：`loadBusinessLib` 的根。
+   * 缺省回退 `../../agents/junwuyou/lib/`（老行为，零改动）。
+   */
+  libDir?: string;
+  /** 数据域 id（诊断用） */
+  dataDomain?: string;
+  /** 本 agent 的业务后端 origin 白名单（`enforceDataOrigin` 用；缺省 undefined = 不启用域约束） */
+  allowedOrigins?: string[];
 }
 
 /** Chat 响应 */
@@ -75,7 +91,23 @@ export class AgentRuntime {
     this.config = config;
     this.sessionDir = config.sessionDir ?? join(os.homedir(), ".mozi", "sessions");
 
-    logger.info({ sessionDir: this.sessionDir }, "AgentRuntime initialized");
+    // P4（C-P4-5）：把本 agent 的数据域登记为**请求外兜底**。
+    // ⚠️ 为什么是"兜底"而不是"全局设置"：多 agent 同进程时，模块级变量会被**后装配的 agent 覆盖**，
+    // 结果 A 的工具带着 B 的白名单发请求 → 被自己的隔离层拒掉（P4a 实测：元一装配后君无忧报价全断）。
+    // 因此请求期改用 ALS 上下文（见 chat/chatStream 里的 runWithDataDomain），这里只提供请求外兜底，
+    // 且 setFallbackDataDomain **不覆盖**已设置的值（谁兜底由装配顺序之外的规则决定）。
+    if (config.allowedOrigins !== undefined) {
+      setFallbackDataDomain({
+        agentId: config.agentId,
+        dataDomain: config.dataDomain,
+        allowedOrigins: config.allowedOrigins,
+      });
+    }
+
+    logger.info(
+      { sessionDir: this.sessionDir, agentId: config.agentId ?? "(default)", libDir: config.libDir ?? "(default)" },
+      "AgentRuntime initialized"
+    );
   }
 
   /** 设置 SkillsRegistry */
@@ -86,6 +118,22 @@ export class AgentRuntime {
   /** 注册自定义工具 */
   registerCustomTool(tool: AgentTool): void {
     this.customTools.push(tool);
+  }
+
+  /**
+   * 已注册的自定义工具（P4 装配期断言用）。
+   *
+   * 用途：`assembleAgent` 在装配后断言"注册进本 runtime 的工具名集合 == 描述符声明的 toolset"——
+   * 多 agent 下漏注册/串注册（B 的 runtime 里混进 A 的工具）是**安全事件**，
+   * 不能等到客户问出错答案才发现（A12/A13）。
+   */
+  get registeredTools(): AgentTool[] {
+    return this.customTools;
+  }
+
+  /** 已注册工具名（同上，断言直接可比对） */
+  registeredToolNames(): string[] {
+    return this.customTools.map((t) => t.name);
   }
 
   /**
@@ -211,7 +259,18 @@ export class AgentRuntime {
     // P0.6：先解析客户身份（会话键已按客户汇聚）→ 身份/客户 id 进请求上下文，
     // 模型侧看不到数字主键（V-009），但工具层能取到（订单归属、回投目标都靠它）。
     const resolved = await this.resolveIdentity(context, sessionKey);
-    const rc = await this.loadBusinessLib("request-context");
+    // P4：business lib 是**每个 agent 各一份**的（数据隔离的直接后果）。新 agent 未必已经
+    // 备齐 request-context / customer-profile，缺了不能让整轮对话挂掉 —— 降级为"无档案注入"
+    // 并打告警（V-016 兜底：宁可这次不记得，也不中断服务）。缺失本身由 harness/CI 兜底发现。
+    let rc: any = null;
+    try {
+      rc = await this.loadBusinessLib("request-context");
+    } catch (e) {
+      logger.warn({ error: (e as Error).message, libDir: this.config.libDir }, "request-context 缺失 → 本轮不注入档案/渠道后缀");
+    }
+    if (!rc?.runWithRequestContext) {
+      return await this.runWithProfileDegraded(context, fn);
+    }
     // ctx 是**同一个对象引用**：先把身份放进去，档案加载完再补 profileText。
     const ctx: Record<string, unknown> = {
       sessionKey,
@@ -240,6 +299,11 @@ export class AgentRuntime {
     });
   }
 
+  /** 业务库缺失时的降级路径：仍要注入渠道后缀（渠道范式是框架侧知识，不依赖业务库） */
+  private async runWithProfileDegraded<T>(context: InboundMessageContext, fn: (profileSuffix: string) => Promise<T>): Promise<T> {
+    return await fn(this.buildChannelSuffix(context));
+  }
+
   /** 构建系统提示 */
   private buildSystemPromptText(): string {
     // 需求 4（前缀稳定/提升缓存率）：系统提示位于**可缓存前缀的最前面**，
@@ -258,10 +322,35 @@ export class AgentRuntime {
     });
   }
 
-  /** 动态加载 junwuyou 业务库（纯 JS，不参与 tsc 编译，故用变量路径避免类型解析） */
+  /**
+   * 动态加载业务库（纯 JS，不参与 tsc 编译，故用变量路径避免类型解析）。
+   *
+   * P4（F6/数据隔离）：**根目录可配**。原实现把 `../../agents/junwuyou/lib/` 写死，
+   * 于是第二个 agent 的档案/身份/请求上下文**仍然全部来自君无忧** ——
+   * 那样"数据隔离"只是名义上的（B 的客户档案查得到 A 的客户）。
+   * 现在：`config.libDir` 若给了绝对路径用它；否则相对仓库 `runtime/openmozi/` 解析；
+   * 都没给时保留老路径（单 agent 零改动）。
+   */
   private async loadBusinessLib(name: string): Promise<any> {
-    const spec = `../../agents/junwuyou/lib/${name}.js`;
+    const configured = this.config.libDir;
+    let spec: string;
+    if (configured) {
+      const base = isAbsolute(configured) ? configured : resolvePath(this.baseDir(), configured);
+      // ⚠️ Windows 上绝对路径必须先转 file:// URL：直接丢给 import() 会报
+      // ERR_UNSUPPORTED_ESM_URL_SCHEME（协议被解析成 'd:'）。P4 接上 libDir 后
+      // **两个 agent 都走这条分支**，漏了这一步会导致元一装配即报"找不到 request-context.js"。
+      spec = pathToFileURL(join(base, `${name}.js`)).href;
+    } else {
+      spec = `../../agents/junwuyou/lib/${name}.js`;
+    }
     return await import(spec);
+  }
+
+  /** 仓库内 `runtime/openmozi/` 的绝对路径（dist/<分层>/x.js → 上溯到 runtime/openmozi） */
+  private baseDir(): string {
+    // 本文件编译后位于 dist/agents/runtime.js（或 src/agents/runtime.ts）
+    const here = fileURLToPath(import.meta.url);
+    return resolvePath(dirname(here), "..", "..");
   }
 
   /** 渠道级提示词后缀（P0.6）：按渠道切换交互范式，但**不动可缓存前缀**（L-063） */
@@ -340,16 +429,50 @@ export class AgentRuntime {
   }
 
   /**
-   * 会话键（P0.6 / C-040）：**按客户汇聚**。
+   * 会话键（P0.6 / C-040）：**按客户汇聚**；P4（C-P4-6）：**再按 agent 命名空间隔离**。
    *
    * 顺序：身份层解析出 customer_id → `customer:{id}`（同一人跨渠道落在同一会话）；
    * 解析不可用（业务库不可达 / 无身份 / 群聊）→ 回退旧键 `{channel}:{senderId}`（V-016 兜底）。
+   * **P4 加了 agentId 前缀**：两个 agent 的客户 id 由**各自的业务库**产生，
+   * 数值会撞（A 的 customer:9 与 B 的 customer:9 是两个人），不加前缀就会**共用会话**。
    * 键的形态只有这一处决定（V-014），别处不得再拼一遍。
+   *
+   * 前缀缺省不加（`config.agentId` 未设）→ 与单 agent 时代逐字一致。
    */
   private async sessionKeyFor(context: InboundMessageContext, legacyKey: string): Promise<string> {
     const r = await this.resolveIdentity(context, legacyKey);
-    if (r.ok && r.sessionKey) return r.sessionKey;
-    return legacyKey;
+    const base = r.ok && r.sessionKey ? r.sessionKey : legacyKey;
+    return this.namespaced(base);
+  }
+
+  /** 给会话键加 agent 命名空间前缀（唯一实现，V-014） */
+  private namespaced(key: string): string {
+    const id = this.config.agentId;
+    if (!id) return key;
+    const prefix = `${id}:`;
+    return key.startsWith(prefix) ? key : `${prefix}${key}`;
+  }
+
+  /**
+   * 本轮请求的数据域上下文（P4 / C-P4-5）：**每轮绑定本 runtime 的域**，
+   * 供业务 HTTP 客户端在 `enforceDataOrigin` 里读取。
+   *
+   * 为什么必须每轮绑定而不是 runtime 构造时全局设置：见 data-domain.ts 里"血的教训"——
+   * 多 agent 同进程时全局变量会被后装配者覆盖，导致 A 的工具用 B 的白名单发请求。
+   */
+  private domainContext(): { agentId?: string; dataDomain?: string; allowedOrigins?: string[] } | null {
+    if (this.config.allowedOrigins === undefined) return null;
+    return {
+      agentId: this.config.agentId,
+      dataDomain: this.config.dataDomain,
+      allowedOrigins: this.config.allowedOrigins,
+    };
+  }
+
+  /** 在"本轮 agent 的数据域"内执行（无域配置时直接执行，行为不变） */
+  private async withDomain<T>(fn: () => Promise<T>): Promise<T> {
+    const ctx = this.domainContext();
+    return ctx ? runWithDataDomain(ctx, fn) : fn();
   }
 
   /** 非流式聊天 */
@@ -357,6 +480,11 @@ export class AgentRuntime {
     const legacyKey = this.legacySessionKey(context);
     const sessionKey = await this.sessionKeyFor(context, legacyKey);
     logger.debug({ sessionKey, legacyKey, content: context.content.slice(0, 100) }, "Processing message");
+    return this.withDomain(() => this.chatWithSession(context, sessionKey));
+  }
+
+  /** chat 的主体（已解析会话键）——单独拆出，便于把整轮包进数据域上下文 */
+  private async chatWithSession(context: InboundMessageContext, sessionKey: string): Promise<ChatResponse> {
 
     const session = await this.getOrCreateSession(sessionKey);
 
@@ -369,7 +497,12 @@ export class AgentRuntime {
     const systemPrompt = this.buildSystemPromptText();
     session.agent.state.systemPrompt = systemPrompt;
     await this.appendTurn(store, context, sessionKey, "user", context.content);
-    await this.runWithProfile(sessionKey, context, async (profileSuffix) => {
+    // ⚠️ 传给 runWithProfile 的必须是**身份键**（`webchat:xxx` / `customer:N`），不能是加了
+    // agentId 命名空间的会话键 —— 两者语义不同：会话键管"存哪条会话"，身份键管"档案/订单归谁"。
+    // P4 实测踩过：把命名空间键当身份键传 → 客户档案查不到 → **模型重复问客户已给过的地址**
+    // （verify-profile-cache D 段 + 真实 webchat 探针双双复现）。
+    const identityKey = this.legacySessionKey(context);
+    await this.runWithProfile(identityKey, context, async (profileSuffix) => {
       const message = profileSuffix ? `${context.content}\n\n${profileSuffix}` : context.content;
       await session.prompt(message);
       await session.agent.waitForIdle();
@@ -501,6 +634,24 @@ export class AgentRuntime {
     context: InboundMessageContext,
     options?: { signal?: AbortSignal }
   ): AsyncGenerator<StreamEvent, ChatResponse, unknown> {
+    // P4：整条流式路径也包进本轮 agent 的数据域上下文（与 chat 同一口径，V-014）。
+    // ⚠️ enterWith 的上下文**不会自动退出**：它留在当前异步执行链上，链上后续无关的活
+    // （另一轮对话、另一个 agent 的工具回调）会读到它 —— harness 首次接线就踩了：
+    // 前一段探针留下的"君无忧域"污染了后一段元一工具的调用。故这里在 finally 里显式复位。
+    const domainCtx = this.domainContext();
+    if (domainCtx) enterWithDataDomain(domainCtx);
+    try {
+      return yield* this.chatStreamInner(context, options);
+    } finally {
+      if (domainCtx) enterWithDataDomain({});
+    }
+  }
+
+  /** chatStream 主体（数据域上下文已绑定） */
+  private async *chatStreamInner(
+    context: InboundMessageContext,
+    options?: { signal?: AbortSignal }
+  ): AsyncGenerator<StreamEvent, ChatResponse, unknown> {
     const legacyKey = this.legacySessionKey(context);
     const sessionKey = await this.sessionKeyFor(context, legacyKey);
     logger.debug({ sessionKey, legacyKey, content: context.content.slice(0, 100) }, "Processing message (stream)");
@@ -583,7 +734,7 @@ export class AgentRuntime {
     // 启动 prompt（先强制设置 systemPrompt，覆盖 pi-agent 0.73 的默认 "Robin Writer"）
     const systemPrompt = this.buildSystemPromptText();
     session.agent.state.systemPrompt = systemPrompt;
-    const promptPromise = this.runWithProfile(sessionKey, context, (profileSuffix) => {
+    const promptPromise = this.runWithProfile(this.legacySessionKey(context), context, (profileSuffix) => {
       const message = profileSuffix ? `${context.content}\n\n${profileSuffix}` : context.content;
       return session.prompt(message, { streamingBehavior: "followUp" }).then(() => session.agent.waitForIdle());
     })
@@ -686,6 +837,10 @@ export class AgentRuntime {
     sessionKey: string,
     messages: Array<{ role: "user" | "assistant"; content: string }>
   ): Promise<void> {
+    // P4：与 chat() 用**同一**命名空间（V-014）。调用方（webchat WS 层）传的是它自己的
+    // `webchat:xxx` 键，而 chat() 会加 agentId 前缀；若这里不加，恢复与创建会指向两个会话
+    // → 客户"刷新后失忆"（L-055 同型症状）。前缀缺省（未设 agentId）时行为不变。
+    sessionKey = this.namespaced(sessionKey);
     const session = await this.getOrCreateSession(sessionKey);
     if (!messages || messages.length === 0) {
       return;
@@ -821,7 +976,7 @@ export class AgentRuntime {
 }
 
 /** 创建 AgentRuntime */
-export function createAgentRuntime(config: MoziConfig): AgentRuntime {
+export function createAgentRuntime(config: MoziConfig, overrides?: Partial<RuntimeConfig>): AgentRuntime {
   const runtimeConfig: RuntimeConfig = {
     model: config.agent.defaultModel,
     provider: config.agent.defaultProvider,
@@ -830,6 +985,9 @@ export function createAgentRuntime(config: MoziConfig): AgentRuntime {
     maxTokens: config.agent.maxTokens,
     workingDirectory: config.agent.workingDirectory,
     sessionDir: config.sessions?.directory,
+    // P4：装配器可覆盖 agentId / libDir / dataDomain / allowedOrigins / systemPrompt /
+    // workingDirectory / llmProfile（provider+model）。缺省不传 → 与单 agent 时代逐字一致。
+    ...(overrides ?? {}),
   };
 
   // 初始化模型解析器
