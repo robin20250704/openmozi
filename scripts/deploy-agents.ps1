@@ -61,7 +61,11 @@ $ErrorActionPreference = "Stop"
 try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch { }
 
 # ── 路径 ──────────────────────────────────────────────────────────────
-$RepoRoot     = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)   # runtime/openmozi
+# 取脚本自身路径：$PSCommandPath 最可靠；被 dot-source 或非常规方式调用时回退 $MyInvocation
+$SelfPath = $PSCommandPath
+if (-not $SelfPath) { $SelfPath = $MyInvocation.MyCommand.Path }
+if (-not $SelfPath) { Write-Host "无法确定脚本自身路径（请用 -File 方式调用）" -ForegroundColor Red; exit 1 }
+$RepoRoot     = Split-Path -Parent (Split-Path -Parent $SelfPath)                      # runtime/openmozi
 $WorkspaceRoot = Split-Path -Parent (Split-Path -Parent $RepoRoot)                     # 仓库根
 $EnvFile      = Join-Path $RepoRoot ".env"
 $RootEnvFile  = Join-Path $WorkspaceRoot ".env"
