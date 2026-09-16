@@ -201,6 +201,57 @@ async function waitReady(timeoutMs = 90000) {
   return false;
 }
 
+/**
+ * P4b：元一电子业务后端（独立应用，回环 53100）也要**部署到位**。
+ *
+ * 为什么必须进 CI 的部署步：交付判据是"部署到位、服务起来、目标用户路径端到端可用"，
+ * 不是"代码写好了"。实测教训：只写不启 → 元一 agent 的工具全部指向一个没在跑的后端，
+ * 客户问价只会得到"系统连不上"（模型是对的，服务确实不在）。按网关同样的方式托管：
+ * pid 探测 → 停旧 → 起新 → 等健康。`YUANYI_NO_DEPLOY=1` 可跳过（本地只改框架时省时间）。
+ */
+async function restartYuanyiBusiness() {
+  const YUANYI_PORT = Number(process.env.YUANYI_PORT || 53100);
+  const ENTRY = path.join(ROOT, "agents", "yuanyi", "business-server.mjs");
+  if (!fs.existsSync(ENTRY)) {
+    ok(`元一业务后端不存在（未接入本仓库），跳过`);
+    return;
+  }
+  if (process.env.YUANYI_NO_DEPLOY === "1") {
+    ok("元一业务后端：按 YUANYI_NO_DEPLOY=1 跳过部署");
+    return;
+  }
+  const old = findPidOnPort(YUANYI_PORT);
+  if (old) {
+    try { process.kill(old); } catch { /* 已退出 */ }
+    for (let i = 0; i < 20 && findPidOnPort(YUANYI_PORT); i++) await sleep(500);
+    ok(`元一业务后端：已停止旧实例（pid ${old}）`);
+  }
+  const out = fs.openSync(path.join(ROOT, "yuanyi-business.log"), "w");
+  const err = fs.openSync(path.join(ROOT, "yuanyi-business-err.log"), "w");
+  const child = spawn(process.execPath, [ENTRY], {
+    cwd: ROOT, detached: true, stdio: ["ignore", out, err],
+    env: { ...process.env, YUANYI_PORT: String(YUANYI_PORT), YUANYI_HOST: "127.0.0.1" },
+  });
+  child.unref();
+  let up = false;
+  for (let i = 0; i < 20 && !up; i++) {
+    await sleep(500);
+    try {
+      const r = await fetch(`http://127.0.0.1:${YUANYI_PORT}/health`);
+      up = r.ok;
+    } catch { /* 还没起来 */ }
+  }
+  const tail = fs.existsSync(path.join(ROOT, "yuanyi-business-err.log"))
+    ? fs.readFileSync(path.join(ROOT, "yuanyi-business-err.log"), "utf8").slice(-200)
+    : "";
+  if (!up) {
+    fail(`元一业务后端 ${YUANYI_PORT} 未就绪（pid ${child.pid}）${tail ? "：" + tail : ""}`);
+    return;
+  }
+  const health = await (await fetch(`http://127.0.0.1:${YUANYI_PORT}/health`)).json();
+  ok(`元一业务后端已就绪（pid ${child.pid}，:${YUANYI_PORT}，SKU ${health.skus} 个${health.sample_data ? "，样本数据" : ""}）`);
+}
+
 step("2/5 部署（重启网关）");
 await restartGateway();
 if (!(await waitReady())) {
@@ -209,6 +260,7 @@ if (!(await waitReady())) {
   process.exit(1);
 }
 ok(`网关已监听 ${PORT}`);
+await restartYuanyiBusiness();
 
 // ───────────────────────── 4. 健康检查 ─────────────────────────
 step("3/5 健康检查");
