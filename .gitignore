@@ -32,3 +32,5 @@ junwuyou-launcher.mjs
 ci.mjs
 scripts/verify-p*.mjs
 package-lock.json
+# CI/验证产物(会话回放等)
+.verify-sessions/
