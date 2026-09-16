@@ -6,8 +6,21 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { AgentRuntime, createAgentRuntime, type RuntimeConfig } from "../src/agents/runtime.js";
 import type { MoziConfig } from "../src/types/index.js";
 
-// Mock pi-coding-agent
-vi.mock("@mariozechner/pi-coding-agent", () => ({
+// Mock pi-coding-agent（P1 升级：包名换 @earendil-works，AuthStorage/ModelRegistry → ModelRuntime）
+// vi.mock 工厂会被提升到顶部，故 testModel 用 vi.hoisted 定义
+const testModel = vi.hoisted(() => ({
+  id: "test-model",
+  name: "Test Model",
+  api: "openai-completions",
+  provider: "test-provider",
+  baseUrl: "https://api.test.com/v1",
+  reasoning: false,
+  input: ["text"],
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  contextWindow: 128000,
+  maxTokens: 4096,
+}));
+vi.mock("@earendil-works/pi-coding-agent", () => ({
   createAgentSession: vi.fn().mockResolvedValue({
     session: {
       prompt: vi.fn().mockResolvedValue(undefined),
@@ -23,35 +36,31 @@ vi.mock("@mariozechner/pi-coding-agent", () => ({
         setTools: vi.fn(),
         waitForIdle: vi.fn().mockResolvedValue(undefined),
         abort: vi.fn(),
+        state: { systemPrompt: "", tools: [], messages: [], model: null },
       },
     },
   }),
   SessionManager: {
     create: vi.fn().mockReturnValue({}),
   },
-  AuthStorage: {
-    inMemory: vi.fn().mockReturnValue({
-      set: vi.fn(),
-      setFallbackResolver: vi.fn(),
+  ModelRuntime: {
+    create: vi.fn().mockResolvedValue({
+      getModel: vi.fn().mockReturnValue(testModel),
+      getModels: vi.fn().mockReturnValue([testModel]),
     }),
   },
-  ModelRegistry: vi.fn().mockImplementation(() => ({})),
 }));
 
-// Mock model-resolver
+// Mock pi-ai（InMemoryCredentialStore）
+vi.mock("@earendil-works/pi-ai", () => ({
+  InMemoryCredentialStore: vi.fn().mockImplementation(() => ({
+    modify: vi.fn().mockResolvedValue(undefined),
+  })),
+}));
+
+// Mock model-resolver（P1：runtime 不再用 resolveModel，但仍用 initModelResolver/getApiKeyForProvider）
 vi.mock("../src/providers/model-resolver.js", () => ({
-  resolveModel: vi.fn().mockReturnValue({
-    id: "test-model",
-    name: "Test Model",
-    api: "openai-completions",
-    provider: "test-provider",
-    baseUrl: "https://api.test.com/v1",
-    reasoning: false,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 128000,
-    maxTokens: 4096,
-  }),
+  resolveModel: vi.fn().mockReturnValue(testModel),
   initModelResolver: vi.fn(),
   getApiKeyForProvider: vi.fn().mockReturnValue("test-api-key"),
 }));
@@ -219,14 +228,14 @@ describe("agents/runtime", () => {
         // Create session first
         await runtime.chat(context);
 
-        const info = runtime.getSessionInfo(context);
+        const info = await runtime.getSessionInfo(context);
 
         expect(info).not.toBeNull();
         expect(info).toHaveProperty("messageCount");
         expect(info).toHaveProperty("lastUpdate");
       });
 
-      it("should return null for non-existent session", () => {
+      it("should return null for non-existent session", async () => {
         const context = {
           channelId: "test",
           chatId: "non-existent",
@@ -237,7 +246,7 @@ describe("agents/runtime", () => {
           timestamp: Date.now(),
         };
 
-        const info = runtime.getSessionInfo(context);
+        const info = await runtime.getSessionInfo(context);
 
         expect(info).toBeNull();
       });

@@ -6,7 +6,7 @@ import { Type } from "@sinclair/typebox";
 import { readFile, writeFile, mkdir } from "fs/promises";
 import { existsSync } from "fs";
 import { resolve, dirname, sep } from "path";
-import type { AgentTool } from "@mariozechner/pi-agent-core";
+import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { jsonResult, readStringParam } from "../common.js";
 
 interface PatchHunk { oldStart: number; oldCount: number; newStart: number; newCount: number; lines: string[]; }

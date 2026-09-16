@@ -5,7 +5,7 @@
  */
 
 import { Command } from "commander";
-import type { Message } from "@mariozechner/pi-ai";
+import type { Message } from "@earendil-works/pi-ai/compat";
 import { loadConfig, validateRequiredConfig } from "../config/index.js";
 import { startGateway } from "../gateway/server.js";
 import { initializeProviders, getAllModels, resolveModel, getApiKeyForProvider } from "../providers/index.js";
@@ -208,7 +208,7 @@ program
       console.log(`   提供商: ${provider}`);
       console.log(`   输入 'exit' 退出\n`);
 
-      const { streamSimple } = await import("@mariozechner/pi-ai");
+      const { streamSimple } = await import("@earendil-works/pi-ai/compat");
       const piModel = resolveModel(provider, model);
 
       if (!piModel) {

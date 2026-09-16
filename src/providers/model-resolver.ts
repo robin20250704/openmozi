@@ -2,8 +2,8 @@
  * Model Resolver - 将 mozi 配置映射为 pi-ai 的 Model 对象
  */
 
-import type { Model, Api, Provider } from "@mariozechner/pi-ai";
-import { getModel } from "@mariozechner/pi-ai";
+import type { Model, Api, Provider } from "@earendil-works/pi-ai/compat";
+import { getModel } from "@earendil-works/pi-ai/compat";
 import type { ProviderId, SimpleProviderConfig, MoziConfig, ModelDefinition } from "../types/index.js";
 import { getChildLogger } from "../utils/logger.js";
 
@@ -119,7 +119,7 @@ function buildOpenAIModel(
     id: modelId,
     name: modelDef.name,
     api: "openai-completions",
-    provider: provider as Provider,
+    provider,
     baseUrl,
     reasoning: modelDef.supportsReasoning,
     input: modelDef.supportsVision ? ["text", "image"] : ["text"],
@@ -143,7 +143,7 @@ function buildAnthropicModel(
     id: modelId,
     name: modelDef.name,
     api: "anthropic-messages",
-    provider: provider as Provider,
+    provider,
     baseUrl,
     reasoning: modelDef.supportsReasoning,
     input: modelDef.supportsVision ? ["text", "image"] : ["text"],

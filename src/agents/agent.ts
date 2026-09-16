@@ -8,7 +8,7 @@ import type {
   ProviderId,
   MoziConfig,
 } from "../types/index.js";
-import type { AgentTool } from "@mariozechner/pi-agent-core";
+import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { AgentRuntime, createAgentRuntime, type ChatResponse, type StreamEvent } from "./runtime.js";
 import { getChildLogger } from "../utils/logger.js";
 import { createBuiltinTools, type BuiltinToolsOptions } from "../tools/builtin/index.js";
@@ -154,13 +154,13 @@ export class Agent {
     this.runtime.clearSession(context);
   }
 
-  getSessionInfo(context: InboundMessageContext): {
+  async getSessionInfo(context: InboundMessageContext): Promise<{
     messageCount: number;
     estimatedTokens: number;
     hasSummary: boolean;
     lastUpdate: Date;
-  } | null {
-    const info = this.runtime.getSessionInfo(context);
+  } | null> {
+    const info = await this.runtime.getSessionInfo(context);
     if (!info) return null;
 
     return {

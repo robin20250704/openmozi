@@ -7,7 +7,7 @@ import { readFile, writeFile, stat, readdir, realpath } from "fs/promises";
 import { existsSync } from "fs";
 import { join, resolve, relative, sep, dirname, basename } from "path";
 import { glob } from "glob";
-import type { AgentTool } from "@mariozechner/pi-agent-core";
+import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { jsonResult, textResult, readStringParam, readNumberParam, readBooleanParam } from "../common.js";
 
 /** 文件系统工具选项 */

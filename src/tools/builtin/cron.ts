@@ -3,7 +3,7 @@
  */
 
 import { Type } from "@sinclair/typebox";
-import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
+import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { CronService } from "../../cron/service.js";
 import type { CronSchedule, CronJobCreate, CronPayload } from "../../cron/types.js";
 import { TIME_CONSTANTS } from "../../cron/types.js";

@@ -9,14 +9,14 @@ import {
   createAgentSession,
   AgentSession,
   SessionManager,
-  AuthStorage,
-  ModelRegistry,
+  ModelRuntime,
   type ToolDefinition,
   type AgentSessionEvent,
-} from "@mariozechner/pi-coding-agent";
-import type { AgentTool, ThinkingLevel } from "@mariozechner/pi-agent-core";
+} from "@earendil-works/pi-coding-agent";
+import { InMemoryCredentialStore } from "@earendil-works/pi-ai";
+import type { AgentTool, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { MoziConfig, ProviderId, InboundMessageContext } from "../types/index.js";
-import { resolveModel, initModelResolver, getApiKeyForProvider } from "../providers/model-resolver.js";
+import { initModelResolver, getApiKeyForProvider } from "../providers/model-resolver.js";
 import { getChildLogger } from "../utils/logger.js";
 import { buildSystemPrompt } from "./system-prompt.js";
 import type { SkillsRegistry } from "../skills/index.js";
@@ -68,6 +68,8 @@ export class AgentRuntime {
   private sessionDir: string;
   private skillsRegistry: SkillsRegistry | null = null;
   private customTools: AgentTool[] = [];
+  /** 惰性共享的 ModelRuntime（pi 0.85：替代旧 AuthStorage+ModelRegistry，内置 minimax-cn provider） */
+  private _modelRuntime: ModelRuntime | null = null;
 
   constructor(config: RuntimeConfig) {
     this.config = config;
@@ -86,72 +88,59 @@ export class AgentRuntime {
     this.customTools.push(tool);
   }
 
+  /**
+   * P1 升级（pi 0.85）：把 OpenMozi 的 provider 映射到 pi 内置 provider。
+   * 旧版用 custom-anthropic（手动注册 api.minimax.chat 的 anthropic 通道）；0.85 内置 minimax-cn
+   * （api.minimaxi.com，我们的 MINIMAX_API_KEY 实测有效，MiniMax-M3 走标准 anthropic-messages）。
+   * 这样删掉整段手动 AuthStorage+ModelRegistry+registerProvider 装配（也正是 L-102 被旁路的代码）。
+   */
+  private piProviderId(): string {
+    const p = String(this.config.provider);
+    // custom-anthropic / minimax / custom-openai（MiniMax 各历史通道）统一收敛到内置 minimax-cn
+    if (p === "custom-anthropic" || p === "minimax" || p === "custom-openai") return "minimax-cn";
+    return p;
+  }
+
+  /** 取 MiniMax API key（优先 config.providers，回退 MINIMAX_API_KEY 环境变量） */
+  private minimaxApiKey(): string | undefined {
+    return (
+      getApiKeyForProvider(this.config.provider) ||
+      getApiKeyForProvider("minimax") ||
+      getApiKeyForProvider("minimax-cn") ||
+      process.env.MINIMAX_API_KEY
+    );
+  }
+
+  /** 惰性创建共享 ModelRuntime：注入 minimax-cn 凭据（env 解耦，走 InMemoryCredentialStore） */
+  private async getOrCreateModelRuntime(): Promise<ModelRuntime> {
+    if (this._modelRuntime) return this._modelRuntime;
+    const creds = new InMemoryCredentialStore();
+    const key = this.minimaxApiKey();
+    if (key) {
+      await creds.modify("minimax-cn", () => Promise.resolve({ type: "api_key" as const, key }));
+    }
+    this._modelRuntime = await ModelRuntime.create({ credentials: creds });
+    return this._modelRuntime;
+  }
+
   /** 获取或创建会话 */
   private async getOrCreateSession(sessionKey: string): Promise<AgentSession> {
     let session = this.sessions.get(sessionKey);
     if (session) return session;
 
-    // 解析模型
-    const model = resolveModel(this.config.provider, this.config.model);
+    // P1 升级（pi 0.85）：用内置 provider + ModelRuntime 取模型（替代旧 resolveModel+AuthStorage+ModelRegistry 手动装配）
+    const modelRuntime = await this.getOrCreateModelRuntime();
+    const piProvider = this.piProviderId();
+    const model = modelRuntime.getModel(piProvider, this.config.model);
     if (!model) {
-      throw new Error(`Cannot resolve model: ${this.config.provider}/${this.config.model}`);
+      const avail = modelRuntime.getModels(piProvider).map((m) => m.id).join(", ");
+      throw new Error(`Cannot resolve model: ${piProvider}/${this.config.model} (available: ${avail || "none"})`);
     }
+    logger.debug({ provider: piProvider, model: model.id, baseUrl: model.baseUrl }, "Model resolved via built-in provider");
 
     // 为每个会话创建独立的 SessionManager
     const sessionFile = join(this.sessionDir, `${this.sanitizeSessionKey(sessionKey)}.jsonl`);
     const sessionManager = SessionManager.create(this.config.workingDirectory ?? process.cwd(), sessionFile);
-
-    // 创建 AuthStorage 并从 mozi 配置预填充 API key
-    const authStorage = AuthStorage.inMemory();
-
-    // 重要：使用 model.provider (由 resolveModel 设置) 而不是 this.config.provider
-    // 因为 createAgentSession 内部通过 model.provider 查找 API key
-    const modelProvider = model.provider;
-    const apiKey = getApiKeyForProvider(this.config.provider);
-    if (apiKey) {
-      // 同时设置 config.provider 和 model.provider (如果不同)
-      authStorage.set(this.config.provider, { type: "api_key", key: apiKey });
-      if (modelProvider !== this.config.provider) {
-        authStorage.set(modelProvider, { type: "api_key", key: apiKey });
-      }
-      logger.debug({ provider: this.config.provider, modelProvider }, "API key set from mozi config");
-    }
-
-    // 设置 fallback resolver 以支持其他 provider
-    authStorage.setFallbackResolver((provider: string) => {
-      // 尝试直接获取
-      let key = getApiKeyForProvider(provider);
-      // 如果找不到，尝试用 config.provider 的 key (因为可能是同一个服务的不同别名)
-      if (!key && provider === modelProvider) {
-        key = getApiKeyForProvider(this.config.provider);
-      }
-      if (key) {
-        logger.debug({ provider }, "Got API key from mozi config via fallback");
-      }
-      return key;
-    });
-
-    // 创建 ModelRegistry 使用同一个 authStorage (pi 0.73: ModelRegistry.create 替代 new)
-    const modelRegistry = ModelRegistry.create(authStorage);
-
-    // 把 OpenMozi 的 model 注册到 ModelRegistry（pi 0.73 的 ModelRegistry 是空的，需要我们手动注册）
-    // ProviderConfigInput: { apiKey?, baseUrl?, models: [{ id, name, reasoning, input, cost, api }] }
-    modelRegistry.registerProvider(this.config.provider, {
-      apiKey: apiKey ?? "",
-      baseUrl: model.baseUrl,
-      models: [
-        {
-          id: model.id,
-          name: model.name,
-          api: model.api,  // 必需：pi 0.73 要求 model 有 api 字段（openai-completions / anthropic-messages 等）
-          contextWindow: model.contextWindow,
-          maxTokens: model.maxTokens,
-          reasoning: model.reasoning ?? false,
-          input: model.input ?? ["text"],
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        },
-      ],
-    });
 
     // 构建自定义工具定义
     const customToolDefinitions: ToolDefinition[] = this.customTools.map((tool) => ({
@@ -162,11 +151,10 @@ export class AgentRuntime {
       execute: tool.execute,
     }));
 
-    // 创建 AgentSession
+    // 创建 AgentSession（pi 0.85：传 modelRuntime + model；不再传 authStorage/modelRegistry）
     const { session: newSession } = await createAgentSession({
       cwd: this.config.workingDirectory ?? process.cwd(),
-      authStorage,
-      modelRegistry,
+      modelRuntime,
       model,
       thinkingLevel: "medium" as ThinkingLevel,
       sessionManager,
@@ -381,7 +369,15 @@ export class AgentRuntime {
     });
 
     // 提取最后一条助手消息
-    const lastText = session.getLastAssistantText() ?? "";
+    let lastText = session.getLastAssistantText() ?? "";
+
+    // D8/P2 安全兜底：MiniMax-M3 在复杂 prompt 首轮会把工具调用写成 DSML 文本（非标准 tool_use），
+    // 内置 provider 标准解析器把 DSML 当纯文本透传 → 漏给客户。这里识别并就地处理：
+    // 白名单工具 → 直接执行后带结果重问；非白名单/不可解析 → 剥掉 DSML 强提示重问一次。
+    if (this.containsDsml(lastText)) {
+      lastText = await this.recoverFromDsmlLeak(session, lastText, context);
+    }
+
     await this.appendTurn(store, context, sessionKey, "assistant", lastText);
 
     // 获取使用统计
@@ -397,6 +393,81 @@ export class AgentRuntime {
         totalTokens: stats.tokens.total,
       },
     };
+  }
+
+  /** 检测助手回复里是否漏出 MiniMax DSML 工具调用语法（D8/P2 安全兜底） */
+  private containsDsml(text: string): boolean {
+    return typeof text === "string" && text.includes("<｜｜DSML｜｜");
+  }
+
+  /**
+   * 从 DSML 文本里解析工具调用（name + arguments）。
+   * 兼容实测形态：`<｜｜DSML｜｜ invoke name="X" arguments="{...}">...</｜｜DSML｜｜ invoke>`。
+   * arguments 可能是含转义引号的 JSON，用非贪婪 + 转义感知捕获。
+   */
+  private extractDsmlToolCalls(text: string): Array<{ name: string; args: Record<string, unknown> }> {
+    const calls: Array<{ name: string; args: Record<string, unknown> }> = [];
+    const re = /<｜｜DSML｜｜\s*invoke\s+name="([^"]+)"\s+arguments="((?:[^"\\]|\\.)*)"/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(text)) !== null) {
+      const name = m[1] ?? "";
+      if (!name) continue;
+      let args: Record<string, unknown> = {};
+      try {
+        args = JSON.parse((m[2] ?? "").replace(/\\"/g, '"')) as Record<string, unknown>;
+      } catch {
+        args = {};
+      }
+      calls.push({ name, args });
+    }
+    return calls;
+  }
+
+  /**
+   * DSML 泄漏就地恢复（D8/P2）：
+   * 1) 若 DSML 里解析出**白名单内**工具 → 直接执行该工具，把结果喂回会话重问，让模型用大白话作答；
+   * 2) 否则（幻觉工具名/不可解析）→ 剥掉 DSML 文本，带强提示重问一次。
+   * 重试上限 2 次，仍泄漏则吞掉 DSML 段落、只留自然语言，绝不把 `<｜｜DSML｜｜` 透给客户。
+   */
+  private async recoverFromDsmlLeak(session: AgentSession, leaked: string, context: InboundMessageContext): Promise<string> {
+    const stripDsml = (s: string) =>
+      s
+        .replace(/<｜｜DSML｜｜[\s\S]*?<｜｜DSML｜｜\s*calls>/g, "")
+        .replace(/<｜｜DSML｜｜[\s\S]*$/g, "")
+        .trim();
+
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const calls = this.extractDsmlToolCalls(leaked);
+      const whitelisted = calls.find((c) => this.customTools.some((t) => t.name === c.name));
+
+      try {
+        if (whitelisted) {
+          const tool = this.customTools.find((t) => t.name === whitelisted.name)!;
+          logger.warn({ tool: whitelisted.name, args: whitelisted.args }, "DSML leak: executing whitelisted tool directly");
+          const result = await tool.execute("dsml-guard", whitelisted.args as never);
+          const resultText = (result?.content ?? [])
+            .map((c: { type: string; text?: string }) => (c.type === "text" ? (c.text ?? "") : ""))
+            .join("\n");
+          await session.prompt(
+            `（系统提示：你刚才想调用工具 ${whitelisted.name}，系统已替你执行。返回结果如下，请直接用大白话回答客户，禁止再输出任何 <｜｜DSML｜｜ 工具语法。）\n工具结果：${resultText}`
+          );
+        } else {
+          logger.warn({ leaked: leaked.slice(0, 120) }, "DSML leak: no whitelisted tool parsed, re-prompting with nudge");
+          await session.prompt(
+            `（系统提示：请直接用自然语言回答客户，禁止输出任何 <｜｜DSML｜｜ 工具调用语法；如需查价/查知识库，请调用你已有的工具拿到结果后，用大白话告诉客户。）\n客户原话：${context.content}`
+          );
+        }
+        await session.agent.waitForIdle();
+        leaked = session.getLastAssistantText() ?? "";
+        if (!this.containsDsml(leaked)) return leaked.trim();
+      } catch (e) {
+        logger.warn({ error: (e as Error).message }, "DSML leak recovery attempt failed");
+        break;
+      }
+    }
+    // 兜底：仍泄漏则吞掉 DSML 段落，只留自然语言
+    const cleaned = stripDsml(leaked);
+    return cleaned.length > 0 ? cleaned : "您好，这个问题我帮您确认一下，稍后回复您。";
   }
 
   /** 流式聊天 */
@@ -415,13 +486,53 @@ export class AgentRuntime {
     let done = false;
     let promptError: Error | null = null;
 
+    // D8/P2 流式 DSML 兜底：MiniMax 偶发把工具调用写成 DSML 文本增量透传。
+    // 用状态机吞掉 DSML 段落（<｜｜DSML｜｜ ... </｜｜DSML｜｜ calls>），只放行自然语言增量。
+    // 处理跨增量被切开的标记：把未决尾巴留在 pending，等下一个增量拼齐再判。
+    const DSML_OPEN = "<｜｜DSML｜｜";
+    const DSML_CLOSE = "</｜｜DSML｜｜";
+    let dsmlPending = "";
+    let dsmlInBlock = false;
+    const dsmlFilter = (delta: string): string => {
+      let buf = dsmlPending + delta;
+      let out = "";
+      for (;;) {
+        if (dsmlInBlock) {
+          const closeIdx = buf.indexOf(DSML_CLOSE);
+          if (closeIdx === -1) { buf = ""; break; } // 整块仍在 DSML 内，全吞
+          buf = buf.slice(closeIdx + DSML_CLOSE.length);
+          // 跳过到 calls> 结束（若紧跟）
+          const gt = buf.indexOf(">");
+          if (gt !== -1 && gt <= 6) buf = buf.slice(gt + 1);
+          dsmlInBlock = false;
+          continue;
+        }
+        const openIdx = buf.indexOf(DSML_OPEN);
+        if (openIdx === -1) {
+          // 无开标记：保留可能是半个开标记的尾巴，其余放行
+          const tail = buf.length >= DSML_OPEN.length ? buf.slice(-(DSML_OPEN.length - 1)) : buf;
+          const emitEnd = buf.length - tail.length;
+          out += buf.slice(0, emitEnd);
+          buf = tail;
+          break;
+        }
+        // 有开标记：放行其前的干净文本，进入吞 DSML 模式
+        out += buf.slice(0, openIdx);
+        buf = buf.slice(openIdx);
+        dsmlInBlock = true;
+      }
+      dsmlPending = buf;
+      return out;
+    };
+
     // 订阅事件
     const unsubscribe = session.subscribe((event: AgentSessionEvent) => {
       if (event.type === "message_update") {
         const updateEvent = event as { type: "message_update"; assistantMessageEvent: { type: string; delta?: string } };
         // 处理 text_delta（正常内容）
         if (updateEvent.assistantMessageEvent?.type === "text_delta" && updateEvent.assistantMessageEvent.delta) {
-          eventQueue.push({ type: "text_delta", delta: updateEvent.assistantMessageEvent.delta });
+          const clean = dsmlFilter(updateEvent.assistantMessageEvent.delta);
+          if (clean) eventQueue.push({ type: "text_delta", delta: clean });
         }
         // thinking_delta 不转发给用户（reasoning 内容是内部的，不应暴露给终端客户）
         // 通过 config.agent.thinkingVisible=true 可重新打开（调试用）
@@ -524,11 +635,15 @@ export class AgentRuntime {
   }
 
   /** 获取会话信息（webchat 用；同步接口，身份未解析时以旧键为准） */
-  getSessionInfo(context: InboundMessageContext): {
+  async getSessionInfo(context: InboundMessageContext): Promise<{
     messageCount: number;
     lastUpdate: Date;
-  } | null {
-    const sessionKey = this.legacySessionKey(context);
+  } | null> {
+    // P1：与 chat 用同一汇聚会话键（sessionKeyFor），否则身份解析出 customer:{id} 后
+    // 这里按旧键 {channel}:{senderId} 查 → 永远 null（原实现与 chat 不一致的潜在缺陷，
+    // 此前被"模型不可解析"的 mock 失败掩盖，升级后暴露）。
+    const legacyKey = this.legacySessionKey(context);
+    const sessionKey = await this.sessionKeyFor(context, legacyKey);
     const session = this.sessions.get(sessionKey);
     if (!session) return null;
 

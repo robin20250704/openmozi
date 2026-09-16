@@ -4,7 +4,7 @@
  */
 
 import type { TSchema, Static } from "@sinclair/typebox";
-import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
+import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 
 // 重新导出 AgentTool 作为 Tool 类型
 export type Tool<TParameters extends TSchema = TSchema, TDetails = unknown> = AgentTool<TParameters, TDetails>;

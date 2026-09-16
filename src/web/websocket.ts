@@ -180,7 +180,7 @@ export class WsServer {
           result = this.getSystemStatus();
           break;
         case "session.info":
-          result = this.getSessionInfo(client);
+          result = await this.getSessionInfo(client);
           break;
         case "config.get":
           result = this.getConfigInfo();
@@ -460,7 +460,7 @@ export class WsServer {
   }
 
   /** 获取会话信息 */
-  private getSessionInfo(client: WsClient): unknown {
+  private async getSessionInfo(client: WsClient): Promise<unknown> {
     const context = {
       channelId: "webchat" as const,
       chatId: client.sessionKey || `webchat:${client.id}`,
@@ -472,7 +472,7 @@ export class WsServer {
       timestamp: Date.now(),
     };
 
-    const info = this.agent.getSessionInfo(context);
+    const info = await this.agent.getSessionInfo(context);
     return {
       sessionKey: client.sessionKey,
       sessionId: client.sessionId,

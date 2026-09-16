@@ -2,7 +2,7 @@
  * 工具系统 - 通用工具函数
  */
 
-import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 
 /** 创建 JSON 结果 */
 export function jsonResult(payload: unknown, isError = false): AgentToolResult<unknown> {

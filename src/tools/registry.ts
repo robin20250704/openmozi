@@ -3,7 +3,7 @@
  * 用于插件系统注册自定义工具
  */
 
-import type { AgentTool } from "@mariozechner/pi-agent-core";
+import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { Tool, ToolPolicy } from "./types.js";
 import { TOOL_GROUPS } from "./types.js";
 

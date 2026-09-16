@@ -3,7 +3,7 @@
  */
 
 import { Type } from "@sinclair/typebox";
-import type { AgentTool } from "@mariozechner/pi-agent-core";
+import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { jsonResult, textResult, readStringParam, readNumberParam } from "../common.js";
 import { getSession, getFinishedSession, listRunningSessions, listFinishedSessions, killSession, deleteSession, drainSession, sliceLogLines, tail, formatDuration } from "./process-registry.js";
 

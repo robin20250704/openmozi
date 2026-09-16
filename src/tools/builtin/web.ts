@@ -3,7 +3,7 @@
  */
 
 import { Type } from "@sinclair/typebox";
-import type { AgentTool } from "@mariozechner/pi-agent-core";
+import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { jsonResult, errorResult, readStringParam, readNumberParam } from "../common.js";
 import { getChildLogger } from "../../utils/logger.js";
 

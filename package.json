@@ -55,9 +55,9 @@
     },
     "dependencies": {
         "@larksuiteoapi/node-sdk": "^1.56.1",
-        "@mariozechner/pi-agent-core": "^0.73.1",
-        "@mariozechner/pi-ai": "^0.73.1",
-        "@mariozechner/pi-coding-agent": "^0.73.1",
+        "@earendil-works/pi-agent-core": "^0.85.1",
+        "@earendil-works/pi-ai": "^0.85.1",
+        "@earendil-works/pi-coding-agent": "^0.85.1",
         "@sinclair/typebox": "^0.34.48",
         "@xenova/transformers": "^2.17.2",
         "axios": "^1.13.4",

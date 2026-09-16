@@ -6,7 +6,7 @@
  */
 
 import { Type } from "@sinclair/typebox";
-import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
+import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { jsonResult, errorResult, readStringParam, readNumberParam, readBooleanParam } from "../common.js";
 
 // 浏览器会话状态

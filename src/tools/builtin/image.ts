@@ -3,13 +3,13 @@
  */
 
 import { Type } from "@sinclair/typebox";
-import type { AgentTool } from "@mariozechner/pi-agent-core";
+import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { jsonResult, errorResult, readStringParam } from "../common.js";
 import { resolveModel, getApiKeyForProvider, isProviderAvailable } from "../../providers/index.js";
 import type { ProviderId } from "../../types/index.js";
 import { readFileSync, existsSync } from "fs";
 import { extname } from "path";
-import { completeSimple } from "@mariozechner/pi-ai";
+import { completeSimple } from "@earendil-works/pi-ai/compat";
 
 /** 图片分析工具选项 */
 export interface ImageAnalyzeToolOptions {

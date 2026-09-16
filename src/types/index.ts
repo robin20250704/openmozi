@@ -96,7 +96,7 @@ export interface ChatMessage {
 // ============== 通道相关类型 ==============
 
 /** 通道 ID */
-export type ChannelId = "feishu" | "dingtalk" | "qq" | "wecom" | "webchat" | "email";
+export type ChannelId = "feishu" | "dingtalk" | "qq" | "wecom" | "webchat" | "email" | "miniprogram";
 
 /** 聊天类型 */
 export type ChatType = "direct" | "group";
