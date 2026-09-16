@@ -207,13 +207,12 @@ export class AgentRuntime {
    *     构造发往 LLM 的请求时读出，把档案作为**请求级尾部后缀**注入（不落历史）；
    *  3. 后缀不破坏前缀 → 系统提示 + 工具 + 历史消息这一段仍能命中提示词缓存。
    */
-  private async runWithProfile<T>(sessionKey: string, context: InboundMessageContext, fn: () => Promise<T>): Promise<T> {
+  private async runWithProfile<T>(sessionKey: string, context: InboundMessageContext, fn: (profileSuffix: string) => Promise<T>): Promise<T> {
     // P0.6：先解析客户身份（会话键已按客户汇聚）→ 身份/客户 id 进请求上下文，
     // 模型侧看不到数字主键（V-009），但工具层能取到（订单归属、回投目标都靠它）。
     const resolved = await this.resolveIdentity(context, sessionKey);
     const rc = await this.loadBusinessLib("request-context");
     // ctx 是**同一个对象引用**：先把身份放进去，档案加载完再补 profileText。
-    // 适配器在发请求时（晚于本函数）才读 profileText，因此单层上下文即可（不必嵌套两层）。
     const ctx: Record<string, unknown> = {
       sessionKey,
       identity: resolved.identity || sessionKey,
@@ -230,7 +229,14 @@ export class AgentRuntime {
           logger.warn({ error: (e as Error).message, sessionKey }, "Profile load failed; continuing without profile");
         }
       }
-      return await fn();
+      // P1 回归修复：原 pi-anthropic-patch 适配器（已退役）在发请求时把档案/渠道后缀
+      // 作为**请求级尾部**注入 LLM。适配器退役后档案虽加载却没人注入 → 模型看不到档案、
+      // 重复问地址/电话。这里在 prompt 前显式拼到消息尾部（不落历史、不进可缓存前缀），
+      // 由调用方（chat/chatStream）把它追加到本轮用户消息上。
+      const suffix = [ctx.profileText, ctx.channelSuffix]
+        .filter((s) => typeof s === "string" && s.trim())
+        .join("\n\n");
+      return await fn(suffix);
     });
   }
 
@@ -363,8 +369,9 @@ export class AgentRuntime {
     const systemPrompt = this.buildSystemPromptText();
     session.agent.state.systemPrompt = systemPrompt;
     await this.appendTurn(store, context, sessionKey, "user", context.content);
-    await this.runWithProfile(sessionKey, context, async () => {
-      await session.prompt(context.content);
+    await this.runWithProfile(sessionKey, context, async (profileSuffix) => {
+      const message = profileSuffix ? `${context.content}\n\n${profileSuffix}` : context.content;
+      await session.prompt(message);
       await session.agent.waitForIdle();
     });
 
@@ -576,9 +583,10 @@ export class AgentRuntime {
     // 启动 prompt（先强制设置 systemPrompt，覆盖 pi-agent 0.73 的默认 "Robin Writer"）
     const systemPrompt = this.buildSystemPromptText();
     session.agent.state.systemPrompt = systemPrompt;
-    const promptPromise = this.runWithProfile(sessionKey, context, () =>
-      session.prompt(context.content, { streamingBehavior: "followUp" }).then(() => session.agent.waitForIdle())
-    )
+    const promptPromise = this.runWithProfile(sessionKey, context, (profileSuffix) => {
+      const message = profileSuffix ? `${context.content}\n\n${profileSuffix}` : context.content;
+      return session.prompt(message, { streamingBehavior: "followUp" }).then(() => session.agent.waitForIdle());
+    })
       .catch((err: unknown) => {
         done = true;
         promptError = err instanceof Error ? err : new Error(String(err));
