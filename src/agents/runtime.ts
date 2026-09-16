@@ -402,24 +402,39 @@ export class AgentRuntime {
 
   /**
    * 从 DSML 文本里解析工具调用（name + arguments）。
-   * 兼容实测形态：`<｜｜DSML｜｜ invoke name="X" arguments="{...}">...</｜｜DSML｜｜ invoke>`。
+   * 兼容实测的多种形态：
+   *   A) `<｜｜DSML｜｜ invoke name="X" arguments="{...}">`（arguments 作属性）
+   *   B) `<｜｜DSML｜｜ invoke name="X"> ... <｜｜DSML｜｜ parameter name="arguments" ...>{...}</｜｜DSML｜｜ parameter>`
+   *      （arguments 在子 parameter 里，M3 常见；也有 name="command" 等非 arguments 参数）
    * arguments 可能是含转义引号的 JSON，用非贪婪 + 转义感知捕获。
    */
   private extractDsmlToolCalls(text: string): Array<{ name: string; args: Record<string, unknown> }> {
     const calls: Array<{ name: string; args: Record<string, unknown> }> = [];
-    const re = /<｜｜DSML｜｜\s*invoke\s+name="([^"]+)"\s+arguments="((?:[^"\\]|\\.)*)"/g;
+    const parseJson = (raw: string): Record<string, unknown> => {
+      try {
+        return JSON.parse(raw.replace(/\\"/g, '"')) as Record<string, unknown>;
+      } catch {
+        return {};
+      }
+    };
+
+    // 形态 A：arguments 作属性
+    const reAttr = /<｜｜DSML｜｜\s*invoke\s+name="([^"]+)"\s+arguments="((?:[^"\\]|\\.)*)"/g;
     let m: RegExpExecArray | null;
-    while ((m = re.exec(text)) !== null) {
+    while ((m = reAttr.exec(text)) !== null) {
+      const name = m[1] ?? "";
+      if (name) calls.push({ name, args: parseJson(m[2] ?? "") });
+    }
+
+    // 形态 B：arguments 在子 parameter（跳过已在 A 命中的 name 位置，避免重复）
+    const reChild = /<｜｜DSML｜｜\s*invoke\s+name="([^"]+)"[^>]*>[\s\S]*?<｜｜DSML｜｜\s*parameter\s+name="arguments"[^>]*>((?:[^<]|<(?!\/｜｜DSML))*)<\/｜｜DSML｜｜/g;
+    while ((m = reChild.exec(text)) !== null) {
       const name = m[1] ?? "";
       if (!name) continue;
-      let args: Record<string, unknown> = {};
-      try {
-        args = JSON.parse((m[2] ?? "").replace(/\\"/g, '"')) as Record<string, unknown>;
-      } catch {
-        args = {};
-      }
-      calls.push({ name, args });
+      if (calls.some((c) => c.name === name)) continue; // A 已解析过
+      calls.push({ name, args: parseJson((m[2] ?? "").trim()) });
     }
+
     return calls;
   }
 
@@ -439,11 +454,14 @@ export class AgentRuntime {
     for (let attempt = 0; attempt < 2; attempt++) {
       const calls = this.extractDsmlToolCalls(leaked);
       const whitelisted = calls.find((c) => this.customTools.some((t) => t.name === c.name));
+      // P2 安全打点：DSML 里出现的**全部**工具名（含白名单外）。白名单外工具（如 bash/read/write）
+      // 是安全事件——模型幻觉了不该有的工具，必须既不被执行、也不漏给客户。
+      const blockedTools = calls.filter((c) => !this.customTools.some((t) => t.name === c.name)).map((c) => c.name);
 
       try {
         if (whitelisted) {
           const tool = this.customTools.find((t) => t.name === whitelisted.name)!;
-          logger.warn({ tool: whitelisted.name, args: whitelisted.args }, "DSML leak: executing whitelisted tool directly");
+          logger.warn({ tool: whitelisted.name, args: whitelisted.args, blockedTools }, "DSML leak: executing whitelisted tool directly");
           const result = await tool.execute("dsml-guard", whitelisted.args as never);
           const resultText = (result?.content ?? [])
             .map((c: { type: string; text?: string }) => (c.type === "text" ? (c.text ?? "") : ""))
@@ -452,7 +470,8 @@ export class AgentRuntime {
             `（系统提示：你刚才想调用工具 ${whitelisted.name}，系统已替你执行。返回结果如下，请直接用大白话回答客户，禁止再输出任何 <｜｜DSML｜｜ 工具语法。）\n工具结果：${resultText}`
           );
         } else {
-          logger.warn({ leaked: leaked.slice(0, 120) }, "DSML leak: no whitelisted tool parsed, re-prompting with nudge");
+          // 安全事件：白名单外工具（bash/read/write 等）幻觉 → 不执行、吞 DSML、强提示重问
+          logger.warn({ blockedTools, leaked: leaked.slice(0, 120) }, "DSML leak: BLOCKED non-whitelisted tool hallucination (not executed, suppressed)");
           await session.prompt(
             `（系统提示：请直接用自然语言回答客户，禁止输出任何 <｜｜DSML｜｜ 工具调用语法；如需查价/查知识库，请调用你已有的工具拿到结果后，用大白话告诉客户。）\n客户原话：${context.content}`
           );
