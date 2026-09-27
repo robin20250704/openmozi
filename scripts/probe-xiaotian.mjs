@@ -67,9 +67,12 @@ const extra = toolNames.filter((t) => !declared.has(t));
 check("①装配:工具集与注册一致", missing.length === 0 && extra.length === 0, missing.length || extra.length ? `缺=${missing.join(",") || "-"} 多=${extra.join(",") || "-"}` : `${toolNames.length} 个，逐名一致`);
 
 // ── ② 编码类写工具必须缺席 ──────────────────────────────────────────
-const FORBIDDEN = ["write", "edit", "bash", "shell", "exec", "glob", "grep", "ls", "create_file", "apply_patch", "str_replace"];
-const present = toolNames.filter((t) => FORBIDDEN.some((f) => t.toLowerCase().includes(f)));
-check("②工具面:无写文件/写代码/执行类工具", present.length === 0, present.length ? `发现禁用工具：${present.join(",")}` : `已扫 ${FORBIDDEN.length} 个禁用关键字，0 命中`);
+// 判据用**名字边界**（`(^|_)name($|_)`），不用子串包含：`plm_read_reference` 是合法的只读工具，
+// 子串判据会把它的 "read" 当成"存在读文件工具"而误报。判据过宽与过窄一样是假信号（L-130 家族）。
+const FORBIDDEN = ["write", "write_file", "edit", "bash", "shell", "exec", "run_command", "glob", "grep", "ls", "read", "read_file", "create_file", "apply_patch", "str_replace"];
+const present = toolNames.filter((t) => FORBIDDEN.some((f) => new RegExp(`(^|_)${f}($|_)`, "i").test(t)));
+check("②工具面:无写文件/写代码/执行类工具", present.length === 0,
+  present.length ? `发现禁用工具：${present.join(",")}` : `已扫 ${FORBIDDEN.length} 个禁用名（边界匹配，非子串），0 命中`);
 
 // ── ③ 只读工具的安全边界（越界必须被拒）────────────────────────────
 const { plmReadReferenceTool } = await import(pathToFileURL(path.join(ROOT, "agents", AGENT_ID, "tools", "plm-read-reference.js")).href);
