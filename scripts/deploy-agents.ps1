@@ -3,14 +3,20 @@
   openmozi 多 agent 一键部署（Windows / PowerShell）
 
 .DESCRIPTION
-  一条命令把**两个 agent**（君无忧 junwuyou + 元一电子 yuanyi）及其依赖服务全部部署到本机：
+  一条命令把**三个 agent**（君无忧 junwuyou + 元一电子 yuanyi + 天工 PLM 客服 tiangong）
+  及其依赖服务全部部署到本机：
 
     1) 读配置      —— runtime/openmozi/.env 与仓库根 .env，确定启用哪些 agent、账号路由、端口
     2) 构建        —— tsc 构建（src → dist），可选择跳过
     3) 部署网关    —— 停旧实例 → 起新实例（junwuyou-launcher.mjs，它按描述符装配所有 agent）
     4) 部署元一后端—— 若 AGENT_IDS 含 yuanyi，则拉起 agents/yuanyi/business-server.mjs（:53100）
-    5) 健康断言    —— 逐服务探活（网关/元一后端/君无忧后端/调度器），失败即报错退出
-    6) 状态摘要    —— 打印各 agent 的工具数、数据域、账号路由，便于一眼核对
+    5) 部署天工后端—— 若 AGENT_IDS 含 tiangong，则拉起 agents/tiangong/business-server.mjs（:53112）
+    6) 健康断言    —— 逐服务探活（网关/元一后端/天工后端/君无忧后端/调度器），失败即报错退出
+    7) 状态摘要    —— 打印各 agent 的工具数、数据域、账号路由 + 各 Web UI 入口
+
+  Web UI 入口（同一网关端口，不新开对外端口）：
+    · 通用 WebChat（默认 agent=junwuyou）：http://127.0.0.1:<网关端口>/
+    · 天工 PLM 客服（PLM 视觉风格）：     http://127.0.0.1:<网关端口>/tiangong
 
   设计与既有入口的关系（**不引入第二套真相源**）：
     · `npm run ci` 仍是**发布门禁**（构建 + 部署 + 全量回归）；本脚本只做**部署**，不跑回归；
@@ -21,8 +27,9 @@
   跳过 tsc 构建（只重启服务时用，省时间）。默认会构建。
 
 .PARAMETER Only
-  只部署指定 agent 相关的服务：junwuyou | yuanyi | all（默认 all）。
-  junwuyou = 网关；yuanyi = 网关 + 元一后端（网关必须起，因为两个 agent 在同一进程内装配）。
+  只部署指定 agent 相关的服务：junwuyou | yuanyi | tiangong | all（默认 all）。
+  junwuyou = 网关；yuanyi = 网关 + 元一后端；tiangong = 网关 + 天工后端
+  （网关必须起，因为三个 agent 在同一进程内装配）。
 
 .PARAMETER Status
   只打印当前部署态（进程/端口/健康/路由），不做任何变更。
@@ -49,7 +56,7 @@
 [CmdletBinding()]
 param(
     [switch]$SkipBuild,
-    [ValidateSet("junwuyou", "yuanyi", "all")]
+    [ValidateSet("junwuyou", "yuanyi", "tiangong", "all")]
     [string]$Only = "all",
     [switch]$Status,
     [int]$GatewayPort = 0
@@ -71,6 +78,7 @@ $EnvFile      = Join-Path $RepoRoot ".env"
 $RootEnvFile  = Join-Path $WorkspaceRoot ".env"
 $Launcher     = Join-Path $RepoRoot "junwuyou-launcher.mjs"
 $YuanyiEntry  = Join-Path $RepoRoot "agents\yuanyi\business-server.mjs"
+$TiangongEntry = Join-Path $RepoRoot "agents\tiangong\business-server.mjs"
 
 function Say($msg, $color = "Gray") { Write-Host $msg -ForegroundColor $color }
 function Step($n, $total, $title) { Write-Host ""; Write-Host "━━━ $n/$total $title ━━━" -ForegroundColor Cyan }
@@ -111,6 +119,7 @@ $AgentList  = @($AgentIds -split "," | ForEach-Object { $_.Trim() } | Where-Obje
 $Routes     = Env-Or "AGENT_ROUTES" ""
 if ($GatewayPort -le 0) { $GatewayPort = [int](Env-Or "GATEWAY_PORT" "33000") }
 $YuanyiPort = [int](Env-Or "YUANYI_PORT" "53100")
+$TiangongPort = [int](Env-Or "TIANGONG_PORT" "53112")
 
 Say ""
 Say "openmozi 多 agent 一键部署" "Cyan"
@@ -120,6 +129,8 @@ Say ("  启用 agent  : " + ($AgentList -join ", "))
 Say ("  账号路由    : " + $(if ($Routes) { $Routes } else { "(未配置)" }))
 Say ("  网关端口    : " + $GatewayPort)
 Say ("  元一后端    : " + $YuanyiPort + $(if ($AgentList -contains "yuanyi") { "" } else { "（未启用）" }))
+Say ("  天工后端    : " + $TiangongPort + $(if ($AgentList -contains "tiangong") { "" } else { "（未启用）" }))
+Say ("  天工 Web UI : http://127.0.0.1:" + $GatewayPort + "/tiangong")
 
 # ── 工具函数：pid 探测 / 健康探测 ─────────────────────────────────────
 function Get-PidOnPort([int]$port) {
@@ -164,13 +175,21 @@ if ($Status) {
     Step 1 1 "部署态巡检（只读）"
     $gw = Get-PidOnPort $GatewayPort
     $yy = Get-PidOnPort $YuanyiPort
+    $tg = Get-PidOnPort $TiangongPort
     $jw = Get-PidOnPort 53000
     $sc = Get-PidOnPort 35801
 
-    Say ("  配置端口  : 网关 " + $GatewayPort + "｜元一后端 " + $YuanyiPort + "｜君无忧 53000｜调度器 35801")
+    Say ("  配置端口  : 网关 " + $GatewayPort + "｜元一后端 " + $YuanyiPort + "｜天工后端 " + $TiangongPort + "｜君无忧 53000｜调度器 35801")
     if ($gw) { $h = Test-Health $GatewayPort "/health"; Ok "网关 $GatewayPort：pid $gw，/health → $($h.status)" } else { Bad "网关 $GatewayPort：未运行" }
     if ($AgentList -contains "yuanyi") {
         if ($yy) { $h = Test-Health $YuanyiPort "/health"; Ok "元一后端 $YuanyiPort：pid $yy，/health → $($h.status)" } else { Bad "元一后端 $YuanyiPort：未运行（元一工具会报连不上）" }
+    }
+    if ($AgentList -contains "tiangong") {
+        if ($tg) { $h = Test-Health $TiangongPort "/health"; Ok "天工后端 $TiangongPort：pid $tg，/health → $($h.status)" } else { Bad "天工后端 $TiangongPort：未运行（天工知识库检索会报连不上）" }
+        if ($gw) {
+            $h = Test-Health $GatewayPort "/tiangong"
+            if ($h.ok) { Ok "天工 Web UI：http://127.0.0.1:$GatewayPort/tiangong → $($h.status)" } else { Bad "天工 Web UI 不可达（:$GatewayPort/tiangong）" }
+        }
     }
     if ($jw) { $h = Test-Health 53000 "/api/health"; Ok "君无忧后端 53000：pid $jw → $($h.status)" } else { Warn "君无忧后端 53000：未运行（junwuyou 工具的订单/FAQ 会失败）" }
     if ($sc) { $h = Test-Health 35801 "/health"; Ok "调度器 35801：pid $sc → $($h.status)" } else { Warn "调度器 35801：未运行（报价/排期会失败）" }
@@ -188,8 +207,8 @@ if ($Status) {
 }
 
 # 步骤总数必须与实际 Step 调用数一致（首版写成 5/4，输出出现过 "5/4" 这种自相矛盾的编号）：
-# 构建 + 语法自检 + 网关 + 元一后端 + 健康断言 + 状态摘要 = 6（跳过构建则 5）
-$totalSteps = if ($SkipBuild) { 5 } else { 6 }
+# 构建 + 语法自检 + 网关 + 元一后端 + 天工后端 + 健康断言 + 状态摘要 = 7（跳过构建则 6）
+$totalSteps = if ($SkipBuild) { 6 } else { 7 }
 $step = 0
 
 # ── 1. 构建 ──────────────────────────────────────────────────────────
@@ -287,6 +306,49 @@ if (-not $wantYuanyi) {
     }
 }
 
+# ── 3b. 部署天工 PLM 知识库后端（仅在启用 tiangong 时）────────────────
+$step++
+Step $step $totalSteps "部署天工 PLM 知识库后端"
+$wantTiangong = ($AgentList -contains "tiangong") -and ($Only -eq "all" -or $Only -eq "tiangong")
+if (-not $wantTiangong) {
+    if ($Only -ne "all" -and $Only -ne "tiangong") { Ok "按 -Only $Only 跳过天工后端" }
+    else { Ok "AGENT_IDS 未含 tiangong，跳过（零影响）" }
+} elseif (-not (Test-Path $TiangongEntry)) {
+    Warn "未找到 $TiangongEntry —— 跳过（天工知识库检索将不可用）"
+} else {
+    Stop-ByPort $TiangongPort "天工后端"
+    $env:TIANGONG_PORT = "$TiangongPort"
+    $env:TIANGONG_HOST = "127.0.0.1"
+    Push-Location $RepoRoot
+    try {
+        $tgProc = Start-Process -FilePath (Get-Command node).Source `
+            -ArgumentList @($TiangongEntry) `
+            -WorkingDirectory $RepoRoot -WindowStyle Hidden -PassThru `
+            -RedirectStandardOutput (Join-Path $RepoRoot "tiangong-business.log") `
+            -RedirectStandardError  (Join-Path $RepoRoot "tiangong-business-err.log")
+    } finally { Pop-Location }
+    $tgUp = $false
+    for ($i = 0; $i -lt 40 -and -not $tgUp; $i++) {
+        Start-Sleep -Milliseconds 500
+        $tgUp = (Test-Health $TiangongPort "/health").ok
+    }
+    if ($tgUp) {
+        $body = (Test-Health $TiangongPort "/health").body | ConvertFrom-Json
+        # 空知识库是"看起来在跑但答不了任何问题"，必须显式报警（假绿比红危险）
+        if ([int]$body.faqCount -le 0) {
+            Bad "天工后端在跑但知识库为 0 条 —— 客服将无法回答任何 PLM 问题"
+            exit 1
+        }
+        $sampleTag = if ($body.sample_data) { "，示例数据（替换 data/faq.json 后重启）" } else { "" }
+        Ok "天工后端已就绪（pid $($tgProc.Id)，端口 $TiangongPort，知识库 $($body.faqCount) 条$sampleTag）"
+    } else {
+        Bad "天工后端未就绪（:$TiangongPort）"
+        $errLog = Join-Path $RepoRoot "tiangong-business-err.log"
+        if (Test-Path $errLog) { Get-Content $errLog -Tail 10 -Encoding UTF8 | ForEach-Object { Say ("    " + $_) } }
+        exit 1
+    }
+}
+
 # ── 4. 健康断言（部署判据：服务起来 + 依赖在）────────────────────────
 $step++
 Step $step $totalSteps "健康断言"
@@ -298,6 +360,13 @@ if ($h.ok) { Ok "网关 $GatewayPort → $($h.status)" } else { Bad "网关 $Gat
 if ($wantYuanyi) {
     $h = Test-Health $YuanyiPort "/health"
     if ($h.ok) { Ok "元一后端 $YuanyiPort → $($h.status)" } else { Bad "元一后端 $YuanyiPort → $($h.body)"; $failed += "元一后端" }
+}
+if ($wantTiangong) {
+    $h = Test-Health $TiangongPort "/health"
+    if ($h.ok) { Ok "天工后端 $TiangongPort → $($h.status)" } else { Bad "天工后端 $TiangongPort → $($h.body)"; $failed += "天工后端" }
+    # Web UI 也纳入健康断言：它是本 agent 的**用户路径入口**，后端绿而入口 404 属半交付
+    $h = Test-Health $GatewayPort "/tiangong"
+    if ($h.ok) { Ok "天工 Web UI /tiangong → $($h.status)" } else { Bad "天工 Web UI /tiangong → $($h.body)"; $failed += "天工 Web UI" }
 }
 # 依赖服务：不在线只告警（它们不由本脚本托管），但在线必须健康
 foreach ($dep in @(@{ p = 53000; path = "/api/health"; name = "君无忧后端" }, @{ p = 35801; path = "/health"; name = "调度器" })) {
@@ -335,7 +404,9 @@ Say ""
 Say "部署完成。" "Green"
 Say ("  网关        : http://127.0.0.1:" + $GatewayPort + "/")
 Say ("  元一业务后端: " + $(if ($wantYuanyi) { "http://127.0.0.1:$YuanyiPort/" } else { "(未启用)" }))
-Say "  日志        : launcher.log / launcher-err.log / yuanyi-business.log"
+Say ("  天工客服 UI : " + $(if ($wantTiangong) { "http://127.0.0.1:$GatewayPort/tiangong" } else { "(未启用)" }))
+Say ("  天工知识库  : " + $(if ($wantTiangong) { "http://127.0.0.1:$TiangongPort/health" } else { "(未启用)" }))
+Say "  日志        : launcher.log / launcher-err.log / yuanyi-business.log / tiangong-business.log"
 Say "  再看状态    : pwsh -File scripts/deploy-agents.ps1 -Status"
 Say "  跑发布门禁  : npm run ci（构建 + 部署 + 全量回归）"
 exit 0

@@ -252,6 +252,64 @@ async function restartYuanyiBusiness() {
   ok(`元一业务后端已就绪（pid ${child.pid}，:${YUANYI_PORT}，SKU ${health.skus} 个${health.sample_data ? "，样本数据" : ""}）`);
 }
 
+/**
+ * Tiangong PLM assistant knowledge backend (independent app, loopback 53112).
+ *
+ * Same reasoning as the yuanyi backend: the delivery criterion is "deployed, running,
+ * user path usable end-to-end". A knowledge backend that is written but never started
+ * turns every FAQ question into "backend unreachable" while all static checks stay green.
+ * `TIANGONG_NO_DEPLOY=1` skips it (framework-only edits).
+ *
+ * Extra assertion vs yuanyi: an empty knowledge base is *not* healthy — the service would
+ * be up but unable to answer anything. `faqCount <= 0` fails the deploy loudly.
+ */
+async function restartTiangongBusiness() {
+  const TG_PORT = Number(process.env.TIANGONG_PORT || 53112);
+  const ENTRY = path.join(ROOT, "agents", "tiangong", "business-server.mjs");
+  if (!fs.existsSync(ENTRY)) {
+    ok("天工知识库后端不存在（未接入本仓库），跳过");
+    return;
+  }
+  if (process.env.TIANGONG_NO_DEPLOY === "1") {
+    ok("天工知识库后端：按 TIANGONG_NO_DEPLOY=1 跳过部署");
+    return;
+  }
+  const old = findPidOnPort(TG_PORT);
+  if (old) {
+    try { process.kill(old); } catch { /* 已退出 */ }
+    for (let i = 0; i < 20 && findPidOnPort(TG_PORT); i++) await sleep(500);
+    ok(`天工知识库后端：已停止旧实例（pid ${old}）`);
+  }
+  const out = fs.openSync(path.join(ROOT, "tiangong-business.log"), "w");
+  const err = fs.openSync(path.join(ROOT, "tiangong-business-err.log"), "w");
+  const child = spawn(process.execPath, [ENTRY], {
+    cwd: ROOT, detached: true, stdio: ["ignore", out, err],
+    env: { ...process.env, TIANGONG_PORT: String(TG_PORT), TIANGONG_HOST: "127.0.0.1" },
+  });
+  child.unref();
+  let up = false;
+  let health = null;
+  for (let i = 0; i < 20 && !up; i++) {
+    await sleep(500);
+    try {
+      const r = await fetch(`http://127.0.0.1:${TG_PORT}/health`);
+      if (r.ok) { health = await r.json(); up = true; }
+    } catch { /* 还没起来 */ }
+  }
+  const tail = fs.existsSync(path.join(ROOT, "tiangong-business-err.log"))
+    ? fs.readFileSync(path.join(ROOT, "tiangong-business-err.log"), "utf8").slice(-200)
+    : "";
+  if (!up) {
+    fail(`天工知识库后端 ${TG_PORT} 未就绪（pid ${child.pid}）${tail ? "：" + tail : ""}`);
+    return;
+  }
+  if (!(Number(health?.faqCount) > 0)) {
+    fail(`天工知识库为 0 条（pid ${child.pid}，:${TG_PORT}）—— 服务在跑但答不了任何问题，属半交付`);
+    return;
+  }
+  ok(`天工知识库后端已就绪（pid ${child.pid}，:${TG_PORT}，知识库 ${health.faqCount} 条${health.sample_data ? "，示例数据" : ""}）`);
+}
+
 step("2/5 部署（重启网关）");
 await restartGateway();
 if (!(await waitReady())) {
@@ -261,6 +319,7 @@ if (!(await waitReady())) {
 }
 ok(`网关已监听 ${PORT}`);
 await restartYuanyiBusiness();
+await restartTiangongBusiness();
 
 // ───────────────────────── 4. 健康检查 ─────────────────────────
 step("3/5 健康检查");
@@ -274,6 +333,23 @@ try {
   fail(`HTTP 探测失败：${e.message}`);
 }
 
+/**
+ * 天工 PLM 客服的 Web UI 也是**用户路径入口**（需求 1），必须和网关一起探活。
+ * 判据不只是 200：还要命中的 PLM 设计令牌（否则"页面能开、但不是 PLM 风格"会被放过）。
+ */
+try {
+  const resp = await fetch(`http://127.0.0.1:${PORT}/tiangong`);
+  const html = await resp.text();
+  resp.status === 200 ? ok("天工客服 Web UI /tiangong → 200") : fail(`天工客服 Web UI /tiangong → HTTP ${resp.status}`);
+  const tokens = ["--primary: #2563eb", "--sidebar: #0f172a", "--ai: #8b5cf6"];
+  const missing = tokens.filter((t) => !html.includes(t));
+  missing.length === 0
+    ? ok("天工客服 Web UI 命中 PLM 设计令牌（primary/sidebar/ai 三色）")
+    : fail(`天工客服 Web UI 缺 PLM 设计令牌：${missing.join(", ")}`);
+} catch (e) {
+  fail(`天工客服 Web UI 探测失败：${e.message}`);
+}
+
 const errLog = fs.existsSync(path.join(ROOT, "launcher-err.log")) ? fs.readFileSync(path.join(ROOT, "launcher-err.log"), "utf8") : "";
 errLog.trim() === "" ? ok("stderr 干净") : warn(`stderr 有输出（前 200 字）：${errLog.trim().slice(0, 200)}`);
 
@@ -283,15 +359,18 @@ if (NO_E2E) {
   process.exit(failures.length ? 1 : 0);
 }
 
-function runNode(script, label, extraArgs = []) {
-  const r = spawnSync(process.execPath, [script, ...extraArgs], { cwd: ROOT, encoding: "utf8" });
+function runNode(script, label, extraArgs = [], extraEnv = {}) {
+  const r = spawnSync(process.execPath, [script, ...extraArgs], {
+    cwd: ROOT,
+    encoding: "utf8",
+    env: { ...process.env, ...extraEnv },
+  });
   const out = (r.stdout || "") + (r.stderr || "");
   // 优先取"合计"行（多段 harness 有小计与合计之分），否则取首个汇总
   const m = out.match(/合计\s*(\d+)\s*通过\s*\/\s*(\d+)\s*失败/) || out.match(/(\d+)\s*通过\s*\/\s*(\d+)\s*失败/);
   const passed = r.status === 0;
   const detail = m ? `(${m[1]} 通过 / ${m[2]} 失败)` : "";
-  passed ? ok(`${label} ${detail}`) : fail(`${label} ${detail}`.trim());
-  if (!passed) log(out.split("\n").slice(-14).map((l) => `     ${C.d}${l}${C.x}`).join("\n"));
+  passed ? ok(`${label} ${detail}`) : fail(`${label} ${detail}`.trim());  if (!passed) log(out.split("\n").slice(-14).map((l) => `     ${C.d}${l}${C.x}`).join("\n"));
   return passed;
 }
 
@@ -355,6 +434,15 @@ runNode("scripts/verify-p06-identity.mjs", "身份汇聚/邮件渠道断言（A2
 // 断言能发现——它曾让线上报价链路整条断掉，而单 agent 回归全绿。
 step("5g/5 多 agent 隔离验收（P4：A6/A10–A25）");
 runNode("scripts/verify-p4-isolation.mjs", "多 agent 三域隔离断言（P4）", []);
+
+// 天工PLM客服（A3–A26）：Web UI 设计令牌、身份头协议、WS 路由、QQ 装配面、数据域。
+// 复用**已在跑的** 53112 后端（KEEP_PROD=1）——CI 的第 2 步刚部署过它，再杀一遍没意义还会打断线上。
+// ⚠️ 上游模型欠费时，端到端答复质量那几条会被 harness 记成 BLOCKED（不算通过）；
+//    CI 口径要"宁可红也不要假绿"时设 TIANGONG_VERIFY_REQUIRE_LLM=1（详见部署手册 §7之二 d）。
+step("5h/5 天工PLM客服验收（A3–A26）");
+runNode("scripts/verify-tiangong.mjs", "天工PLM客服断言（Web UI / 身份协议 / 路由 / QQ 装配）", [], {
+  TIANGONG_VERIFY_KEEP_PROD: "1",
+});
 
 const s = readStamp();
 log(`\n${"─".repeat(52)}`);

@@ -272,10 +272,15 @@ export class AgentRuntime {
       return await this.runWithProfileDegraded(context, fn);
     }
     // ctx 是**同一个对象引用**：先把身份放进去，档案加载完再补 profileText。
+    // senderId/senderName（Web UI 需求 4）：提问者身份随消息进请求上下文，供工具层读取
+    // （`plm_whoami` 是那条链路的观测面）。**只给工具层用，不拼进 prompt**——
+    // 身份来自请求头（不可信输入），拼进提示词等于给提示注入留口子。
     const ctx: Record<string, unknown> = {
       sessionKey,
       identity: resolved.identity || sessionKey,
       customerId: resolved.customerId ?? null,
+      senderId: context.senderId ?? null,
+      senderName: context.senderName ?? null,
       profileText: "",
       channelSuffix: this.buildChannelSuffix(context),
     };
@@ -703,13 +708,33 @@ export class AgentRuntime {
     };
 
     // 订阅事件
+    //
+    // ⚠️ 本批新增的两件事都源自同一个实测缺陷（2026-09-27，天工接入时发现）：
+    // 上游模型报错（当时是账号欠费 `402 insufficient_balance_error`）时，pi 既不发
+    // `message_update` 也不抛异常，只发一个 `agent_end` —— 于是本函数"正常结束、
+    // 正文为空"，调用方（WebSocket）把空串当正常回答发出去，用户看到**空气泡**，
+    // 运维面没有任何告警（LOG_LEVEL=info 时连一行日志都没有）。
+    // 实测影响面：**三个 agent 全部如此**（另两个 agent 的网页端也一样），
+    // 只是没人从这个角度看，所以一直没被发现（"看起来 agent 没说话"最像提示词问题）。
+    // 修法：① 把 pi 的 error 事件原样记下来并在收尾时抛出；② 兜底"零文本零工具"判为失败。
+    let emittedText = false;
+    let emittedTool = false;
+    let modelError: string | null = null;
     const unsubscribe = session.subscribe((event: AgentSessionEvent) => {
+      // pi 的事件联合类型里没有 "error" 分支（类型上不存在），但**运行期**确实会派发错误事件
+      // （模型鉴权/额度/限流）。所以这里按结构读，不按类型联合判 —— 读不到也不影响兜底判据。
+      const raw = event as unknown as { type?: string; error?: unknown };
+      if (raw.error) {
+        const e = raw.error;
+        modelError = typeof e === "string" ? e : ((e as { message?: string })?.message || JSON.stringify(e)).slice(0, 400);
+        logger.error({ agentId: this.config.agentId, modelError }, "模型侧错误事件（本轮回答将为空）");
+      }
       if (event.type === "message_update") {
         const updateEvent = event as { type: "message_update"; assistantMessageEvent: { type: string; delta?: string } };
         // 处理 text_delta（正常内容）
         if (updateEvent.assistantMessageEvent?.type === "text_delta" && updateEvent.assistantMessageEvent.delta) {
           const clean = dsmlFilter(updateEvent.assistantMessageEvent.delta);
-          if (clean) eventQueue.push({ type: "text_delta", delta: clean });
+          if (clean) { emittedText = true; eventQueue.push({ type: "text_delta", delta: clean }); }
         }
         // thinking_delta 不转发给用户（reasoning 内容是内部的，不应暴露给终端客户）
         // 通过 config.agent.thinkingVisible=true 可重新打开（调试用）
@@ -718,6 +743,7 @@ export class AgentRuntime {
         }
       } else if (event.type === "tool_execution_start") {
         const toolEvent = event as any;
+        emittedTool = true;
         const argsPreview = this.getArgsPreview(toolEvent.args);
         eventQueue.push({ type: "tool_start", name: toolEvent.toolName, argsPreview });
       } else if (event.type === "tool_execution_end") {
@@ -772,6 +798,16 @@ export class AgentRuntime {
 
     if (promptError) {
       throw promptError;
+    }
+
+    // 空回答守卫（见订阅处的注释）：既没出文本、也没调过工具，且没有显式异常 ——
+    // 这不是"模型选择不说话"，而是**上游失败**。必须让调用方看到错误，而不是收到空串。
+    if (!emittedText && !emittedTool) {
+      throw new Error(
+        modelError
+          ? `模型调用失败：${modelError}`
+          : "模型本轮没有产生任何输出（无文本、无工具调用）——常见原因：上游额度/鉴权/限流，或模型不可用；请查看服务端日志"
+      );
     }
 
     // 获取结果

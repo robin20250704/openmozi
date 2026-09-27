@@ -25,6 +25,7 @@ import { initializeProviders } from "../providers/index.js";
 import { getChildLogger, setLogger, createLogger } from "../utils/logger.js";
 import { WsServer } from "../web/websocket.js";
 import { handleStaticRequest } from "../web/static.js";
+import { renderPlmChatHtml, PLM_CHAT_ROUTE } from "../web/plm-chat.js";
 
 const logger = getChildLogger("gateway");
 
@@ -234,6 +235,21 @@ export class Gateway {
       this.extraChannels.push({ route: ch.agentRoute ?? `email:${extra.account ?? extra.imapUser}`, channel: ch });
     }
 
+    // 天工 PLM 客服的 Web UI（PLM 视觉风格单页；需求 1/2/4）
+    // 与 `/`（通用 WebChat）并存：`/` 仍是默认 agent 的页面，本入口固定服务 tiangong。
+    this.app.get([PLM_CHAT_ROUTE, `${PLM_CHAT_ROUTE}/`], (req: Request, res: Response) => {
+      const agentId = this.agents.byId("tiangong") ? "tiangong" : this.agents.defaultId;
+      if (!agentId) {
+        res.status(503).json({ error: "no agent assembled" });
+        return;
+      }
+      const html = renderPlmChatHtml({ agentId, config: this.config, req });
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      // 本页既有内联脚本也有 WS 连接：CSP 只放开自身来源（不引任何外部 CDN，离线可用）
+      res.setHeader("Cache-Control", "no-store");
+      res.send(html);
+    });
+
     // WebChat 静态文件服务 (放在其他路由之后，作为默认处理)
     this.app.use((req, res, next) => {
       const handled = handleStaticRequest(req, res, { config: this.config });
@@ -389,10 +405,13 @@ export class Gateway {
     initializeProviders(this.config);
 
     // 初始化 WebSocket 服务器
+    // P4：把 agent 注册表交给 WS 层 —— `/ws?agent=<id>` 才能路由到指定 agent。
+    // 不传时行为与单 agent 时代一致（回落 `this.agent`）。
     this.wsServer = new WsServer({
       server: this.httpServer,
       agent: this.agent,
       config: this.config,
+      registry: this.agents,
     });
 
     // 初始化通道

@@ -1,0 +1,22 @@
+{
+  "id": "tiangong",
+  "name": "天工 PLM 客服（小工）",
+  "promptRef": "prompt.md",
+  "toolsModule": "tools/index.js",
+  "libDir": "agents/tiangong/lib",
+  "dataDomain": "tiangong",
+  "allowedOrigins": [
+    "http://127.0.0.1:53112"
+  ],
+  "toolset": [
+    "plm_faq_search",
+    "plm_get_current_time",
+    "plm_whoami"
+  ],
+  "accountRoutes": [],
+  "webUi": {
+    "path": "/tiangong",
+    "title": "天工 PLM 客服"
+  },
+  "note": "accountRoutes 由 runtime/openmozi/.env 的 AGENT_ROUTES 声明（如 qq:<appId>=tiangong）。allowedOrigins 只有本 agent 自己的知识库后端（53112）——打 53000/35801（君无忧）或 53100（元一）会被数据域边界拒（C-P4-5）。工具名一律带 plm_ 前缀：与另两个 agent 的工具名零交集是工具隔离断言（A4）的强判据。webUi.path 是网关为这个 agent 挂的 Web UI 入口。"
+}

@@ -3,7 +3,7 @@
  */
 
 import { WebSocketServer, WebSocket } from "ws";
-import type { Server as HttpServer } from "http";
+import type { Server as HttpServer, IncomingMessage } from "http";
 import { getChildLogger } from "../utils/logger.js";
 import { generateId } from "../utils/index.js";
 import type {
@@ -24,6 +24,7 @@ import type {
   ConfigValidateResult,
 } from "./types.js";
 import type { Agent } from "../agents/agent.js";
+import type { AgentRegistry } from "../agents/registry.js";
 import type { MoziConfig, ProviderId } from "../types/index.js";
 import { getAllProviders } from "../providers/index.js";
 import { getAllChannels } from "../channels/index.js";
@@ -43,6 +44,24 @@ interface WsClient {
   lastPing: number;
   /** 当前聊天请求的 AbortController，用于取消 */
   currentAbortController: AbortController | null;
+  /** 本连接绑定的 agent id（`?agent=` 或默认 agent）——一个连接只服务一个 agent */
+  agentId: string;
+  /** 本连接调用的 agent（多 agent 时取自注册表；单 agent 时即构造参数里的 agent） */
+  agent: Agent;
+  /**
+   * 提问者身份（Web UI 需求 4）：由升级请求头 `X-PLM-User` / `X-PLM-User-Name`
+   * 或查询参数 `?user=` / `?name=` 提供；缺省为匿名。
+   * 一旦绑定就属于**这个连接**，后续每条消息都用它——不给"每条消息各自带身份"留口子
+   * （那会让同一条对话里出现两个提问者，且会话键会跟着漂移）。
+   */
+  user: { id: string | null; name: string | null; source: "header" | "query" | "none" };
+}
+
+/** 提问者身份（WS 层解析结果） */
+export interface WsCallerIdentity {
+  id: string | null;
+  name: string | null;
+  source: "header" | "query" | "none";
 }
 
 /** WebSocket 服务选项 */
@@ -50,10 +69,109 @@ export interface WsServerOptions {
   server: HttpServer;
   agent: Agent;
   config: MoziConfig;
+  /**
+   * 多 agent 注册表（P4 起由 launcher 注入）。
+   *
+   * 为什么是可选：单 agent 部署（`AGENT_IDS=junwuyou`）时网关也单 agent，
+   * 不注入时行为必须与"只有一个 agent"的时代**逐字一致**（U-4 回滚前提）。
+   * 注入后：`/ws?agent=<id>` 命中注册表则用该 agent，未命中/未传则回落默认 agent。
+   */
+  registry?: AgentRegistry;
   /** 心跳检测间隔 (毫秒), 默认 30000 */
   heartbeatInterval?: number;
   /** 客户端超时时间 (毫秒), 默认 60000 */
   clientTimeout?: number;
+}
+
+/**
+ * 身份头的取值解码。
+ *
+ * ⚠️ 实测（本批 A14 第一次跑红）：**HTTP 头值只能是 latin-1/ASCII 字节**，
+ * 直接传中文显示名（`X-PLM-User-Name: 张工`）会被 Node 的 HTTP 解析器拒绝：
+ * `Invalid character in header content ["X-PLM-User-Name"]` —— 连接根本建不起来。
+ * 浏览器 `fetch` 也会抛 `TypeError: Invalid value`。所以中文名称**必须**按
+ * RFC 3986 的百分号编码传（`%E5%BC%A0%E5%B7%A5`），服务端在这里解码。
+ * ASCII 名称（`Zhang Gong`）两种形态都能收（解码后与原文相同 → 幂等）。
+ */
+function pickHeader(v: unknown): string | null {
+  const s = Array.isArray(v) ? String(v[0]) : v == null ? "" : String(v);
+  return decodeIdentityValue(s);
+}
+
+/** 查询参数（浏览器 WS 无法设自定义头时的回落）—— URLSearchParams 已解码，这里只需裁剪 */
+function pickQuery(v: string | null): string | null {
+  const t = (v ?? "").trim();
+  return t ? t.slice(0, 128) : null;
+}
+
+/** 百分号编码 → 原文；解码失败时原样返回（绝不因为一个坏字符丢身份） */
+function decodeIdentityValue(raw: string): string | null {
+  let s = raw.trim();
+  if (!s) return null;
+  if (/%[0-9a-fA-F]{2}/.test(s)) {
+    try {
+      s = decodeURIComponent(s);
+    } catch {
+      /* 保留原样 */
+    }
+  }
+  s = s.trim().slice(0, 128);
+  return s || null;
+}
+
+/**
+ * 从 WS 升级请求里取提问者身份（Web UI 需求 4）。
+ *
+ * 优先级：**HTTP 头 > 查询参数**。
+ * 头名沿用 PLM 既有口径 `X-PLM-User`（08-前端实现规格 §6.9 恒发该头），
+ * `X-PLM-User-Name` 为本项目新增（PLM 侧目前只有 ID）。
+ *
+ * 为什么保留查询参数回落：浏览器 `WebSocket` API **天生无法设置自定义头**，
+ * 所以"前端网关注入头"在纯浏览器场景拿不到——回落参数是让本机自测可用的最小手段。
+ *
+ * 信任边界（必须知道）：查询参数等价于**用户自报**。所以提供
+ * `PLM_REQUIRE_HEADER_IDENTITY=1` 彻底关掉回落（生产口径：只认前端网关注入的头）。
+ * 默认 0 是因为本服务只监听回环（C-045 家族）；一旦 `OPENMOZI_HOST=0.0.0.0`，
+ * 必须先设 1 并给服务加鉴权——否则同网段任何人都能自称任意身份。
+ */
+export function parseCallerIdentity(req: { headers?: Record<string, unknown>; url?: string }): WsCallerIdentity {
+  const h = req.headers ?? {};
+  const headerId = pickHeader(h["x-plm-user"] ?? h["x-user-id"]);
+  const headerName = pickHeader(h["x-plm-user-name"] ?? h["x-user-name"]);
+  if (headerId || headerName) {
+    return { id: headerId, name: headerName, source: "header" };
+  }
+  if (process.env.PLM_REQUIRE_HEADER_IDENTITY === "1") {
+    if (req.url && /[?&](user|name)=/.test(req.url)) {
+      logger.warn(
+        { url: req.url.split("?")[0] },
+        "PLM_REQUIRE_HEADER_IDENTITY=1：忽略查询参数里的身份（该口径只接受前端网关注入的请求头）"
+      );
+    }
+    return { id: null, name: null, source: "none" };
+  }
+  try {
+    const u = new URL(req.url || "/", "http://localhost");
+    const qid = pickQuery(u.searchParams.get("user"));
+    const qname = pickQuery(u.searchParams.get("name"));
+    if (qid || qname) return { id: qid, name: qname, source: "query" };
+  } catch {
+    /* URL 解析失败：按匿名处理，不阻塞连接 */
+  }
+  return { id: null, name: null, source: "none" };
+}
+
+/**
+ * webchat 的 senderId：**必须稳定且不与他人相同**。
+ *
+ * 用身份 id 时加 `plm:` 前缀，是为了让"同一个人从浏览器问"与"从 QQ 问"在会话键上可区分；
+ * 未带头时回落连接 id（每连接一个会话，与改造前行为一致）。
+ * 已有 `plm:` 前缀的不再叠一层（`X-PLM-User: plm.zhang` 会变成 `plm:plm.zhang` ——
+ * 会话键里叠前缀会让同一个人的历史分裂成两份）。
+ */
+function webchatSenderId(user: WsCallerIdentity, clientId: string): string {
+  if (!user.id) return clientId;
+  return user.id.startsWith("plm:") ? user.id : `plm:${user.id}`;
 }
 
 /** WebSocket 服务器类 */
@@ -62,12 +180,14 @@ export class WsServer {
   private clients = new Map<string, WsClient>();
   private agent: Agent;
   private config: MoziConfig;
+  private registry?: AgentRegistry;
   private startTime = Date.now();
   private heartbeatInterval: number;
   private clientTimeout: number;
 
   constructor(options: WsServerOptions) {
     this.agent = options.agent;
+    this.registry = options.registry;
     this.config = options.config;
     this.heartbeatInterval = options.heartbeatInterval ?? 30000;
     this.clientTimeout = options.clientTimeout ?? 60000;
@@ -78,7 +198,7 @@ export class WsServer {
     });
 
     this.wss.on("connection", (ws, req) => {
-      this.handleConnection(ws);
+      this.handleConnection(ws, req);
     });
 
     // 心跳检测
@@ -88,26 +208,45 @@ export class WsServer {
   }
 
   /** 处理新连接 */
-  private async handleConnection(ws: WebSocket): Promise<void> {
+  private async handleConnection(ws: WebSocket, req?: IncomingMessage): Promise<void> {
     const clientId = generateId("client");
+
+    // ① 选 agent：`?agent=<id>` 命中注册表 → 用该 agent；否则默认 agent（单 agent 行为不变）。
+    //    为什么要在这里定而不是"每条消息各定一次"：一个连接就是一个人的一段对话，
+    //    中途换 agent 会让上下文串到另一个 agent 的会话里（且审计上说不清谁答的）。
+    const selection = this.selectAgent(req?.url);
+    // ② 取提问者身份（需求 4）；来源是升级请求的 HTTP 头（优先）或查询参数
+    const user = req ? parseCallerIdentity(req) : { id: null, name: null, source: "none" as const };
+    const sessionKey = `webchat:${webchatSenderId(user, clientId)}`;
 
     // 不立即创建 session，等待客户端发送 sessions.restore 或 chat.send 时再创建
     const client: WsClient = {
       id: clientId,
       ws,
-      sessionKey: null,
+      sessionKey,
       sessionId: null,
       lastPing: Date.now(),
       currentAbortController: null,
+      agentId: selection.agentId,
+      agent: selection.agent,
+      user,
     };
 
     this.clients.set(clientId, client);
-    logger.info({ clientId }, "Client connected");
+    logger.info(
+      { clientId, agentId: selection.agentId, agentMatched: selection.matched, sessionKey, userSource: user.source, userId: user.id },
+      "Client connected"
+    );
 
-    // 发送欢迎消息 - 不包含 session 信息，等待客户端决定
+    // 发送欢迎消息 —— 带上本次连接的 agent 与身份，供前端展示"当前是谁在问、问的是哪个客服"
     this.sendEvent(ws, "connected", {
       clientId,
       version: "1.0.0",
+      agent: selection.agentId,
+      agentMatched: selection.matched,
+      agentRequested: selection.requested ?? null,
+      sessionKey,
+      user: { id: user.id, name: user.name, source: user.source },
     });
 
     ws.on("message", (data) => {
@@ -162,16 +301,16 @@ export class WsServer {
           result = await this.handleChatClear(client);
           break;
         case "sessions.list":
-          result = await this.handleSessionsList(params as SessionsListParams);
+          result = await this.handleSessionsList(client, params as SessionsListParams);
           break;
         case "sessions.history":
-          result = await this.handleSessionsHistory(params as SessionsHistoryParams);
+          result = await this.handleSessionsHistory(client, params as SessionsHistoryParams);
           break;
         case "sessions.delete":
-          result = await this.handleSessionsDelete(params as SessionsDeleteParams);
+          result = await this.handleSessionsDelete(client, params as SessionsDeleteParams);
           break;
         case "sessions.reset":
-          result = await this.handleSessionsReset(params as SessionsResetParams);
+          result = await this.handleSessionsReset(client, params as SessionsResetParams);
           break;
         case "sessions.restore":
           result = await this.handleSessionsRestore(client, params as SessionsRestoreParams);
@@ -208,6 +347,28 @@ export class WsServer {
     }
   }
 
+  /**
+   * 本连接可见的会话键前缀。
+   *
+   * 为什么需要它：WebChat 的会话列表/历史/删除都按 sessionKey 操作，而会话存储是**全局**
+   * 的（同一份 FileSessionStore 里既有 webchat 会话，也有 QQ/企微客户的 `customer:N` 会话）。
+   * 不加约束时，网页端的会话列表会把**别的渠道客户的会话**列出来，甚至能按 sessionKey
+   * 读到别人的对话记录——这是数据泄漏，不是体验问题。
+   */
+  private sessionPrefixFor(client: WsClient): string {
+    const base = client.user.id ? `webchat:plm:${client.user.id}` : `webchat:${client.id}`;
+    return base;
+  }
+
+  /** 断言某会话键属于本连接（越权即拒绝，不静默返回空——静默会让越权看起来像"没有数据"） */
+  private assertOwnsSession(client: WsClient, sessionKey: string, method: string): void {
+    const pref = this.sessionPrefixFor(client);
+    if (!sessionKey || !sessionKey.startsWith(pref)) {
+      logger.warn({ clientId: client.id, method, sessionKey, allowedPrefix: pref }, "拒绝跨会话访问");
+      throw new Error(`拒绝访问：会话不属于本连接（${method}）`);
+    }
+  }
+
   /** 确保客户端有 session，如果没有则创建 */
   private async ensureSession(client: WsClient): Promise<void> {
     if (client.sessionKey && client.sessionId) {
@@ -215,13 +376,60 @@ export class WsServer {
     }
 
     const store = getSessionStore();
-    const sessionKey = `webchat:${client.id}`;
+    // sessionKey 在 handleConnection 里已定（含 agent 选择与身份），这里只补齐：
+    // 原来这里会把 sessionKey 重写成 `webchat:${client.id}`，多 agent 下会把身份信息抹掉
+    // （用户带 `X-PLM-User` 时同一人的会话键会退化成连接 id ⇒ 每次刷新都是一个新会话）。
+    const sessionKey = client.sessionKey ?? `webchat:${client.id}`;
     const session = await store.getOrCreate(sessionKey);
 
     client.sessionKey = sessionKey;
     client.sessionId = session.sessionId;
 
     logger.info({ clientId: client.id, sessionKey, sessionId: session.sessionId }, "Session created");
+  }
+
+  /**
+   * 选定本连接使用的 agent（多 agent 路由，P4 唯一解析处是 AgentRegistry.resolve）。
+   *
+   * 语义：
+   *  - 未传 `?agent=` 或没有注册表 → 默认 agent（`this.agent`），`matched=false`；
+   *  - 传了且命中 → 该 agent；
+   *  - 传了但未命中 → **回落默认 agent 并显式标注**（`matched=false, requested=<id>`）——
+   *    不抛错是刻意的：一个拼错的 URL 不该让用户看到空白页，但必须在 connected 事件与日志里
+   *    留痕，前端据此提示"该客服不存在，已切到默认客服"（否则用户会以为在用他要的那个）。
+   */
+  private selectAgent(url?: string): { agent: Agent; agentId: string; matched: boolean; requested?: string } {
+    let requested: string | undefined;
+    try {
+      const u = new URL(url || "/", "http://localhost");
+      const a = (u.searchParams.get("agent") || "").trim();
+      if (a) requested = a;
+    } catch {
+      /* 解析失败按未传处理 */
+    }
+    if (requested && this.registry) {
+      const rec = this.registry.byId(requested);
+      if (rec) {
+        return { agent: rec.agent, agentId: rec.descriptor.id, matched: true, requested };
+      }
+      logger.warn({ requested, defaultAgent: this.registry.defaultId }, "未知 agent → 回落默认 agent");
+    }
+    const defaultId = this.registry?.defaultId ?? "default";
+    if (!this.registry && requested) {
+      logger.warn({ requested }, "未注入 agent 注册表（单 agent 部署）→ 忽略 ?agent= 参数");
+    }
+    return { agent: this.agent, agentId: defaultId, matched: false, requested };
+  }
+
+  /**
+   * 取本连接绑定的 agent（唯一访问器，V-014）。
+   *
+   * 为什么不直接读 `this.agent`：多 agent 部署时 `this.agent` 只是**默认** agent，
+   * 用它会让 `?agent=tiangong` 的连接实际由默认 agent 回答 —— 表现是"页面标题是 A、
+   * 回答是 B"，而所有内部断言仍是绿的（这是本项目最贵的一类缺陷）。
+   */
+  private client_agent(client: WsClient): Agent {
+    return client.agent ?? this.agent;
   }
 
   /** 处理聊天发送 */
@@ -254,12 +462,14 @@ export class WsServer {
     };
     await store.appendTranscript(client.sessionId!, client.sessionKey!, userMessage);
 
+    // 需求 4：提问者的 ID/名称随消息一起进 agent（senderId/senderName → 请求上下文）。
+    // senderName 未提供时回退到 ID —— 都不能凭空造一个名字（否则 agent 会以为认识对方）。
     const context = {
       channelId: "webchat" as const,
       chatId: client.sessionKey!,
       messageId,
       senderId: stableSenderId,
-      senderName: "WebChat User",
+      senderName: client.user.name || client.user.id || "WebChat User",
       content: message,
       chatType: "direct" as const,
       timestamp: Date.now(),
@@ -269,7 +479,7 @@ export class WsServer {
     client.currentAbortController = controller;
 
     try {
-      const stream = this.agent.processMessageStream(context, { signal: controller.signal });
+      const stream = this.client_agent(client).processMessageStream(context, { signal: controller.signal });
       let fullContent = "";
 
       for await (const delta of stream) {
@@ -359,18 +569,21 @@ export class WsServer {
   }
 
   /** 处理会话列表 */
-  private async handleSessionsList(params?: SessionsListParams): Promise<unknown> {
+  private async handleSessionsList(client: WsClient, params?: SessionsListParams): Promise<unknown> {
     const store = getSessionStore();
     const sessions = await store.list({
       limit: params?.limit,
       activeMinutes: params?.activeMinutes,
       search: params?.search,
     });
-    return { sessions };
+    // 会话列表按本连接的身份前缀过滤（见 ownsSession 的注释：否则 QQ 客户的会话会出现在网页端列表里）
+    const pref = this.sessionPrefixFor(client);
+    return { sessions: sessions.filter((s) => s.sessionKey.startsWith(pref)), total: sessions.length };
   }
 
   /** 处理获取会话历史 */
-  private async handleSessionsHistory(params: SessionsHistoryParams): Promise<unknown> {
+  private async handleSessionsHistory(client: WsClient, params: SessionsHistoryParams): Promise<unknown> {
+    this.assertOwnsSession(client, params.sessionKey, "sessions.history");
     const store = getSessionStore();
     const session = await store.get(params.sessionKey);
     if (!session) {
@@ -385,14 +598,16 @@ export class WsServer {
   }
 
   /** 处理删除会话 */
-  private async handleSessionsDelete(params: SessionsDeleteParams): Promise<{ success: boolean }> {
+  private async handleSessionsDelete(client: WsClient, params: SessionsDeleteParams): Promise<{ success: boolean }> {
+    this.assertOwnsSession(client, params.sessionKey, "sessions.delete");
     const store = getSessionStore();
     await store.delete(params.sessionKey);
     return { success: true };
   }
 
   /** 处理重置会话 */
-  private async handleSessionsReset(params: SessionsResetParams): Promise<unknown> {
+  private async handleSessionsReset(client: WsClient, params: SessionsResetParams): Promise<unknown> {
+    this.assertOwnsSession(client, params.sessionKey, "sessions.reset");
     const store = getSessionStore();
     const session = await store.reset(params.sessionKey);
     return {
@@ -404,6 +619,7 @@ export class WsServer {
 
   /** 处理恢复会话 */
   private async handleSessionsRestore(client: WsClient, params: SessionsRestoreParams): Promise<unknown> {
+    this.assertOwnsSession(client, params.sessionKey, "sessions.restore");
     const store = getSessionStore();
     const session = await store.get(params.sessionKey);
     if (!session) {
@@ -426,7 +642,7 @@ export class WsServer {
       .map((m) => ({ role: m.role as "user" | "assistant", content: m.content as string }));
 
     if (transcriptMessages.length > 0) {
-      this.agent.restoreSessionFromTranscript(agentSessionKey, transcriptMessages);
+      this.client_agent(client).restoreSessionFromTranscript(agentSessionKey, transcriptMessages);
     }
 
     return {
@@ -465,14 +681,14 @@ export class WsServer {
       channelId: "webchat" as const,
       chatId: client.sessionKey || `webchat:${client.id}`,
       messageId: "",
-      senderId: client.id,
-      senderName: "",
+      senderId: (client.sessionKey || `webchat:${client.id}`).replace("webchat:", ""),
+      senderName: client.user.name || client.user.id || "",
       content: "",
       chatType: "direct" as const,
       timestamp: Date.now(),
     };
 
-    const info = await this.agent.getSessionInfo(context);
+    const info = await this.client_agent(client).getSessionInfo(context);
     return {
       sessionKey: client.sessionKey,
       sessionId: client.sessionId,
