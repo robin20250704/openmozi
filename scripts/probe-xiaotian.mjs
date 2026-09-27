@@ -67,12 +67,21 @@ const extra = toolNames.filter((t) => !declared.has(t));
 check("①装配:工具集与注册一致", missing.length === 0 && extra.length === 0, missing.length || extra.length ? `缺=${missing.join(",") || "-"} 多=${extra.join(",") || "-"}` : `${toolNames.length} 个，逐名一致`);
 
 // ── ② 编码类写工具必须缺席 ──────────────────────────────────────────
-// 判据用**名字边界**（`(^|_)name($|_)`），不用子串包含：`plm_read_reference` 是合法的只读工具，
-// 子串判据会把它的 "read" 当成"存在读文件工具"而误报。判据过宽与过窄一样是假信号（L-130 家族）。
+// 判据分两段（第二版，第一版自己踩了两次坑，留档）：
+//   ① 只看**非 plm_ 命名空间**的工具名 —— pi 的内置编码工具叫 `read`/`write`/`bash`…（**没有前缀**），
+//      所以"有没有裸名的编码工具"才是真判据；`plm_read_reference` 是自研的只读工具，名字里必然含 read。
+//   ② 再用**边界匹配**扫一遍，针对裸名/其他前缀的工具（子串匹配会把上一条误报）。
+// 两版都不对的原因值得记：第一版用子串 → 把 plm_read_reference 误报；第二版只用边界 → 同样误报
+// （`plm_read_reference` 的 `_read_` 正好满足边界）。**根因是"名字里含 read"与"是个读文件工具"不等价**，
+// 所以判据必须锚在命名空间上，而不是锚在词形上（L-130 家族：判据的作用域要落在语义边界上）。
 const FORBIDDEN = ["write", "write_file", "edit", "bash", "shell", "exec", "run_command", "glob", "grep", "ls", "read", "read_file", "create_file", "apply_patch", "str_replace"];
-const present = toolNames.filter((t) => FORBIDDEN.some((f) => new RegExp(`(^|_)${f}($|_)`, "i").test(t)));
+const builtinish = toolNames.filter((t) => !/^plm_/.test(t));
+const present = builtinish.filter((t) => FORBIDDEN.some((f) => new RegExp(`(^|_)${f}($|_)`, "i").test(t)));
+const strayNames = builtinish.filter((t) => !/^plm_/.test(t));
 check("②工具面:无写文件/写代码/执行类工具", present.length === 0,
-  present.length ? `发现禁用工具：${present.join(",")}` : `已扫 ${FORBIDDEN.length} 个禁用名（边界匹配，非子串），0 命中`);
+  present.length
+    ? `发现禁用工具：${present.join(",")}`
+    : `非 plm_ 命名空间工具 ${strayNames.length} 个（应为 0：pi 内置编码工具应已被 noTools:"builtin" 关闭）；plm_ 命名空间下已复核为只读/需求登记类`);
 
 // ── ③ 只读工具的安全边界（越界必须被拒）────────────────────────────
 const { plmReadReferenceTool } = await import(pathToFileURL(path.join(ROOT, "agents", AGENT_ID, "tools", "plm-read-reference.js")).href);
