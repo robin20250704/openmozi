@@ -238,12 +238,22 @@ export class Gateway {
     // 天工 PLM 客服的 Web UI（PLM 视觉风格单页；需求 1/2/4）
     // 与 `/`（通用 WebChat）并存：`/` 仍是默认 agent 的页面，本入口固定服务 tiangong。
     this.app.get([PLM_CHAT_ROUTE, `${PLM_CHAT_ROUTE}/`], (req: Request, res: Response) => {
-      const agentId = this.agents.byId("tiangong") ? "tiangong" : this.agents.defaultId;
-      if (!agentId) {
+      const record = this.agents.byId("tiangong") ?? (this.agents.defaultId ? this.agents.byId(this.agents.defaultId) : undefined);
+      const agentId = record?.descriptor.id;
+      if (!agentId || !record) {
         res.status(503).json({ error: "no agent assembled" });
         return;
       }
-      const html = renderPlmChatHtml({ agentId, config: this.config, req });
+      // 模型档取自**该 agent 的运行时**（provider/model 已被描述符 llmProfile 覆盖）。
+      // 2026-09-27 修：原先传全局 `this.config`，于是页面把小天的模型显示成基线档的 MiniMax-M3
+      // —— 显示的不是实际配置，等于对用户撒谎。
+      const llm = record.runtime.llmInfo();
+      const html = renderPlmChatHtml({
+        agentId,
+        config: this.config,
+        llm: { ...llm, displayName: record.runtime.modelDisplayName() },
+        req,
+      });
       res.setHeader("Content-Type", "text/html; charset=utf-8");
       // 本页既有内联脚本也有 WS 连接：CSP 只放开自身来源（不引任何外部 CDN，离线可用）
       res.setHeader("Cache-Control", "no-store");

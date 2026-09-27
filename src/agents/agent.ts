@@ -50,7 +50,7 @@ export interface AgentResponse {
     completionTokens: number;
     totalTokens: number;
   };
-  provider: ProviderId;
+  provider: ProviderId | string;
   model: string;
 }
 
@@ -176,6 +176,15 @@ export class Agent {
     messages: Array<{ role: "user" | "assistant"; content: string }>
   ): void {
     this.runtime.restoreSessionFromTranscript(sessionKey, messages);
+  }
+
+  /**
+   * 本 agent 实际在用的模型档（provider / model / 上下文窗口）。
+   * 观测面：Web UI 显示与验收断言都从这里取，**不读全局 config.agent**——
+   * 那个是基线档，每个 agent 由自己的描述符 llmProfile 覆盖（V-014：一处实现，一处事实源）。
+   */
+  llmInfo(): ReturnType<AgentRuntime["llmInfo"]> {
+    return this.runtime.llmInfo();
   }
 }
 

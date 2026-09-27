@@ -135,6 +135,9 @@ export async function assembleAgent(
     sessionDir: opts.sessionDir,
     provider: configForAgent.agent.defaultProvider,
     model: configForAgent.agent.defaultModel,
+    // 上下文窗口：描述符声明优先，其次该 provider 的环境变量（agent 级 .env 注入）。
+    // 两者都没有 → undefined → 建会话时沿用 pi 模型目录自带的值（缺省行为不变）。
+    contextWindow: descriptor.llmProfile?.contextWindow,
   });
 
   for (const t of tools) runtime.registerCustomTool(t);

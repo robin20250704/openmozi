@@ -27,10 +27,70 @@ import type { CronService } from "../cron/service.js";
 
 const logger = getChildLogger("runtime");
 
+/**
+ * 上下文窗口的方向盘：provider → 环境变量名。
+ *
+ * 为什么需要它（2026-09-27，用户要求「把上下文窗口设成 KIMI_CODING_CTX_LENGTH 指定的值」）：
+ * pi 0.85 的模型目录给每个模型写死了一个 contextWindow（kimi-for-coding = 262144），
+ * 而**自动压缩的触发点就是这个值**（agent-session.js `_compactBeforeNextAssistantContext`：
+ * `shouldCompact(estimateContextTokens(messages).tokens, model.contextWindow, settings)`）。
+ * 也就是说"上下文窗口"不是一条配置读数，而是**行为开关**：只改读数不改它 = 假生效。
+ * 键名带上厂商前缀（`<VENDOR>_CTX_LENGTH`）是因为运行时只有一张环境变量表：
+ * 不带前缀的两家同用一套 provider 时会互相改窗口，而这种错很难看出来。
+ */
+export const CONTEXT_WINDOW_ENV_BY_PROVIDER: Record<string, string> = {
+  "kimi-coding": "KIMI_CODING_CTX_LENGTH",
+  "minimax-cn": "MINIMAX_CTX_LENGTH",
+  minimax: "MINIMAX_CTX_LENGTH",
+};
+
+/** 「256K」→ 262144（也接受 "262144" / "1M" / "1.5M"；K/M 按 1024 口径） */
+export function parseContextWindowValue(raw: string): number | undefined {
+  const s = String(raw).trim().toUpperCase().replace(/[\s_']/g, "");
+  if (!s) return undefined;
+  const m = /^(\d+(?:\.\d+)?)([KM])?$/.exec(s);
+  if (!m) return undefined;
+  const mult = m[2] === "K" ? 1024 : m[2] === "M" ? 1024 * 1024 : 1;
+  const value = Math.round(Number(m[1]) * mult);
+  return Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+/**
+ * 解析某个 agent 的上下文窗口覆盖值（**未被覆盖时返回 undefined**）。
+ *
+ * 优先级：描述符声明 > 该 provider 的环境变量。两者都没有 → undefined，
+ * 由调用方沿用 pi 模型目录里的值（缺省行为与从前逐字一致，U-4 回滚前提）。
+ *
+ * 值写错时**抛错而不是静默忽略**：静默忽略的症状是"看起来配了、实际没生效"，
+ * 与本次要修的缺陷同类；而启动/建会话就是最好的爆炸点（L-133：规则代码必须有断言证明它生效）。
+ */
+export function resolveContextWindowOverride(
+  provider: string,
+  model: string,
+  declared?: number
+): { contextWindow: number; source: string } | undefined {
+  if (typeof declared === "number" && Number.isFinite(declared) && declared > 0) {
+    return { contextWindow: Math.round(declared), source: "descriptor" };
+  }
+  const envName = CONTEXT_WINDOW_ENV_BY_PROVIDER[provider];
+  if (!envName) return undefined;
+  const raw = process.env[envName];
+  if (raw === undefined || String(raw).trim() === "") return undefined;
+  const parsed = parseContextWindowValue(raw);
+  if (parsed === undefined) {
+    throw new Error(
+      `${envName}="${raw}" 不是合法的上下文窗口值（例：256K / 262144 / 1M）—— ` +
+        `provider=${provider} model=${model}。写错就报错，不静默忽略。`
+    );
+  }
+  return { contextWindow: parsed, source: envName };
+}
+
 /** Runtime 配置 */
 export interface RuntimeConfig {
   model: string;
-  provider: ProviderId;
+  /** provider id（业务侧可能是 pi 未内置的名字，故不锁 ProviderId 联合） */
+  provider: ProviderId | string;
   systemPrompt?: string;
   temperature?: number;
   maxTokens?: number;
@@ -52,12 +112,22 @@ export interface RuntimeConfig {
   dataDomain?: string;
   /** 本 agent 的业务后端 origin 白名单（`enforceDataOrigin` 用；缺省 undefined = 不启用域约束） */
   allowedOrigins?: string[];
+  /**
+   * 上下文窗口覆盖（token 数）。缺省 undefined = 沿用 pi 模型目录里该模型自带的值。
+   * 取值来源见 `resolveContextWindowOverride`（描述符声明 > 该 provider 的环境变量）。
+   */
+  contextWindow?: number;
+  /**
+   * 上一项的来源。**必须由决定它的那一层一起传下来**：否则下游（`llmInfo()`）会把
+   * 环境变量来的值重新判成"描述符声明"—— 读数对、来源错，而判据要逐字比对来源位（A27）。
+   */
+  contextWindowSource?: "descriptor" | "env";
 }
 
 /** Chat 响应 */
 export interface ChatResponse {
   content: string;
-  provider: ProviderId;
+  provider: ProviderId | string;
   model: string;
   usage?: {
     promptTokens: number;
@@ -134,6 +204,50 @@ export class AgentRuntime {
   /** 已注册工具名（同上，断言直接可比对） */
   registeredToolNames(): string[] {
     return this.customTools.map((t) => t.name);
+  }
+
+  /**
+   * 本 agent **实际在用**的模型档（观测面，P4 多 agent 下的显示与断言共用）。
+   *
+   * 为什么需要它（2026-09-27 用户反馈「小天网页里的模型显示为 MiniMax-M3，请按实际配置显示」）：
+   * 全局 `config.agent` 只是**基线档**，每个 agent 的 provider/model 由它自己的描述符
+   * `llmProfile` 覆盖（assemble.ts）。页面直接读全局档 = 显示别人的模型名，
+   * 而且这是"读同一事实源"的反例（V-014）——所以显示必须从这里取，不另抄一份。
+   *
+   * 同步返回（不初始化 ModelRuntime）：页面渲染路径上不允许触发凭据加载。
+   * 值本身来自运行时配置 + `resolveContextWindowOverride` 的纯计算，二者与建会话用的是同一函数，
+   * 故"显示的窗口"就是"生效的窗口"。
+   */
+  llmInfo(): {
+    provider: string;
+    model: string;
+    contextWindow?: number;
+    contextWindowSource: "descriptor" | "env" | "pi-catalog";
+  } {
+    const provider = this.piProviderId();
+    const over = resolveContextWindowOverride(provider, this.config.model, this.config.contextWindow);
+    // 来源以装配期定下的 `contextWindowSource` 为准（它由"最先决定这个值的那一层"写入）。
+    // 只按"是不是 descriptor 入参"推断会在环境变量路径上把来源报错（实测踩到）。
+    const source = over
+      ? (this.config.contextWindowSource ?? (over.source === "descriptor" ? "descriptor" : "env"))
+      : undefined;
+    return {
+      provider,
+      model: this.config.model,
+      ...(over ? { contextWindow: over.contextWindow } : {}),
+      contextWindowSource: source ?? "pi-catalog",
+    };
+  }
+
+  /**
+   * 显示用的模型标识 —— **就是配置里的那两个字面量**（provider / model id）。
+   *
+   * 为什么不去查 pi 模型目录的"漂亮名字"（如 Kimi K2.7 Code）：那是**第二处事实源**，
+   * 目录一变显示就跟实际配置错位，而这次的缺陷正是"显示的不是实际配置"。
+   * 直方显示 id 的好处是**可被判据逐字比对**（页面字符串 == 描述符 llmProfile 的两个字段）。
+   */
+  modelDisplayName(): string {
+    return this.config.model;
   }
 
   /**
@@ -215,6 +329,29 @@ export class AgentRuntime {
     if (!model) {
       const avail = modelRuntime.getModels(piProvider).map((m) => m.id).join(", ");
       throw new Error(`Cannot resolve model: ${piProvider}/${this.config.model} (available: ${avail || "none"})`);
+    }
+    // 上下文窗口生效点：pi 0.85 拿 `model.contextWindow` 判自动压缩触发点，
+    // 所以覆盖必须落在**交给 createAgentSession 的那个模型对象**上，改别处都不生效。
+    // ⚠️ `modelRuntime.getModel()` 返回的是注册表里的**共享可变对象**（不冻结、不拷贝），
+    // 这里是进程内唯一持有该 agent 模型的地方之一，故赋值前先用 logger 留下证据（可被判据复核）。
+    const windowOverride = resolveContextWindowOverride(
+      piProvider,
+      this.config.model,
+      this.config.contextWindow
+    );
+    if (windowOverride && windowOverride.contextWindow !== model.contextWindow) {
+      logger.info(
+        {
+          agentId: this.config.agentId,
+          provider: piProvider,
+          model: model.id,
+          from: model.contextWindow,
+          to: windowOverride.contextWindow,
+          source: windowOverride.source,
+        },
+        "上下文窗口按配置覆盖（pi 自动压缩阈值随之变化）"
+      );
+      model.contextWindow = windowOverride.contextWindow;
     }
     logger.debug({ provider: piProvider, model: model.id, baseUrl: model.baseUrl }, "Model resolved via built-in provider");
 
@@ -1057,6 +1194,24 @@ export function createAgentRuntime(config: MoziConfig, overrides?: Partial<Runti
     // workingDirectory / llmProfile（provider+model）。缺省不传 → 与单 agent 时代逐字一致。
     ...(overrides ?? {}),
   };
+
+  // 上下文窗口：**在 provider/model 定稿之后**再算（overrides 覆盖了 provider/model，
+  // 覆盖前算会取错厂商的环境变量——例如把 MiniMax 的窗口配给 kimi 的 agent）。
+  // 2026-09-27：全局 agent.contextWindow 在 schema 里存在但历史装配路径从未接进 runtime；
+  // 描述符 llmProfile.contextWindow 或该 provider 的 <VENDOR>_CTX_LENGTH 优先。
+  if (runtimeConfig.contextWindow === undefined) {
+    const over = resolveContextWindowOverride(
+      String(runtimeConfig.provider),
+      runtimeConfig.model
+    );
+    if (over) {
+      runtimeConfig.contextWindow = over.contextWindow;
+      runtimeConfig.contextWindowSource = over.source === "descriptor" ? "descriptor" : "env";
+    }
+  } else if (runtimeConfig.contextWindowSource === undefined) {
+    // 调用方直接传了值（没传来源）：按"显式声明"记账
+    runtimeConfig.contextWindowSource = "descriptor";
+  }
 
   // 初始化模型解析器
   initModelResolver(config);

@@ -322,7 +322,9 @@ export class WsServer {
           result = await this.getSessionInfo(client);
           break;
         case "config.get":
-          result = this.getConfigInfo();
+          // 2026-09-27：改成**按本连接的 agent** 报模型档 ——
+          // 原来报的是全局基线档，`?agent=tiangong` 的连接也会显示 MiniMax-M3（显示 ≠ 实际）。
+          result = this.getConfigInfo(client);
           break;
         case "config.validate":
           result = this.validateConfig(params as ConfigSaveParams);
@@ -696,8 +698,13 @@ export class WsServer {
     };
   }
 
-  /** 获取配置信息（脱敏） */
-  private getConfigInfo(): ConfigInfo {
+  /**
+   * 获取配置信息（脱敏）。
+   *
+   * `client` 用于取**本连接实际服务它的 agent** 的模型档（`?agent=<id>` 时不再是默认 agent 的档）；
+   * 不传时回落全局基线档（老调用方/单 agent 部署行为不变）。
+   */
+  private getConfigInfo(client?: WsClient): ConfigInfo {
     // 提供商信息（脱敏 API Key）
     const providers: Record<string, ConfigInfo["providers"][string]> = {};
     for (const [id, config] of Object.entries(this.config.providers)) {
@@ -758,10 +765,17 @@ export class WsServer {
       }
     }
 
-    // Agent 配置
+    // Agent 配置：优先报**本连接 agent 实际在用的档**（多 agent 下全局基线档会显示成别人的模型）
+    const connAgent = client ? this.client_agent(client) : undefined;
+    let connLlm: { provider: string; model: string; contextWindow?: number; contextWindowSource: string } | undefined;
+    try {
+      connLlm = connAgent?.llmInfo();
+    } catch (e) {
+      logger.warn({ error: (e as Error).message }, "取本连接 agent 的模型档失败 → 回落全局基线档");
+    }
     const agent = {
-      defaultProvider: this.config.agent.defaultProvider,
-      defaultModel: this.config.agent.defaultModel,
+      defaultProvider: connLlm?.provider ?? this.config.agent.defaultProvider,
+      defaultModel: connLlm?.model ?? this.config.agent.defaultModel,
       temperature: this.config.agent.temperature,
       maxTokens: this.config.agent.maxTokens,
       systemPrompt: this.config.agent.systemPrompt,

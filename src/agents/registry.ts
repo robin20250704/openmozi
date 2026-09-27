@@ -39,7 +39,15 @@ export interface AgentDescriptor {
   /** 该 agent 的业务后端 origin 白名单（`enforceDataOrigin` 用） */
   allowedOrigins: string[];
   /** LLM 档位（缺省沿用全局 agent 配置） */
-  llmProfile?: { provider?: string; model?: string };
+  llmProfile?: {
+    provider?: string;
+    model?: string;
+    /**
+     * 上下文窗口（token 数）。缺省 → 看该 provider 的环境变量（如 `KIMI_CODING_CTX_LENGTH=256K`），
+     * 再缺省 → 用 pi 模型目录里该模型自带的值。声明在这里的优先级最高。
+     */
+    contextWindow?: number;
+  };
   /** 本 agent 接管的渠道账号路由键（`<channelId>:<accountId>`） */
   accountRoutes: string[];
   /** 描述符所在目录（装配期用于解析 promptRef/toolsModule） */
@@ -75,6 +83,8 @@ export interface AgentDiagEntry {
   routes: string[];
   toolset: string[];
   isDefault: boolean;
+  /** 实际在用的模型档（2026-09-27 起：显示与断言共用这一处，避免各读各的全局基线档） */
+  llm: { provider: string; model: string; contextWindow?: number; contextWindowSource: string };
 }
 
 /** 路由冲突（同一 route 被两个 agent 声明）—— 启动期错误，不降级 */
@@ -180,6 +190,9 @@ export class AgentRegistry {
       routes: (r.descriptor.accountRoutes ?? []).slice(),
       toolset: (r.descriptor.toolset ?? []).slice(),
       isDefault: r.descriptor.id === this.defaultId,
+      // 取**运行时实际值**（provider/model 已按描述符覆盖），不是描述符字面量 ——
+      // 断言要比对的是"跑起来用的是什么"。
+      llm: r.runtime.llmInfo(),
     }));
   }
 }

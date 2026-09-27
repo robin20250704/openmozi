@@ -25,6 +25,21 @@ export const PLM_CHAT_ROUTE = "/tiangong";
 export interface PlmChatHtmlOptions {
   agentId: string;
   config: MoziConfig;
+  /**
+   * 该 agent **实际在用**的模型档（网关从 `record.runtime.llmInfo()` 取，见 2026-09-27 修复）。
+   *
+   * 为什么必须由调用方传入而不是本页自己读 `config.agent`：多 agent 下全局 `config.agent`
+   * 只是基线档，每个 agent 的 provider/model 由自己的描述符 `llmProfile` 覆盖；
+   * 本页若读基线档就会显示**别人的模型名**（缺陷原状：小天显示 MiniMax-M3）。
+   */
+  llm: {
+    provider: string;
+    model: string;
+    contextWindow?: number;
+    contextWindowSource: string;
+    /** 显示用模型标识（当前 = model id 字面量，便于逐字比对） */
+    displayName: string;
+  };
   /** 原始请求（用于读网关侧注入的身份头，作为首屏身份） */
   req?: { headers?: Record<string, unknown> };
 }
@@ -66,11 +81,14 @@ function esc(s: string): string {
 }
 
 export function renderPlmChatHtml(options: PlmChatHtmlOptions): string {
-  const { agentId, config, req } = options;
+  const { agentId, config, req, llm } = options;
   const initial = resolveInitialIdentity(req);
   const requireHeader = process.env.PLM_REQUIRE_HEADER_IDENTITY === "1";
   const title = "天工 PLM 客服";
-  const model = config?.agent?.defaultModel ?? "-";
+  // 模型显示 = 该 agent 实际在用的档（缺省只在调用方没传时才回落到基线档，且一眼能看出是回落）
+  const model = llm?.displayName || llm?.model || config?.agent?.defaultModel || "-";
+  const modelProvider = llm?.provider ?? config?.agent?.defaultProvider ?? "-";
+  const ctxWindow = typeof llm?.contextWindow === "number" && llm.contextWindow > 0 ? Math.round(llm.contextWindow / 1024) + "K" : null;
 
   return `<!DOCTYPE html>
 <html lang="zh-CN">
@@ -277,6 +295,8 @@ body {
     <div class="side-foot">
       <div>客服：<code>${esc(agentId)}</code></div>
       <div>模型：<code>${esc(model)}</code></div>
+      <div>接入：<code>${esc(modelProvider)}</code></div>
+      ${ctxWindow ? `<div title="取值来源：${esc(llm?.contextWindowSource ?? "")}">上下文：<code>${esc(ctxWindow)}</code></div>` : ""}
       <div id="side-conn">连接中…</div>
     </div>
   </aside>
