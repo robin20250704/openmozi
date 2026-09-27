@@ -1,0 +1,38 @@
+{
+  "_comment": "需求草稿模板（PLM 客服 creature · 登记器官的输入）。复制本文件到 .creature/tasks/plm-cs-<主题>/draft.json 后填写。",
+  "_rules": [
+    "① 只写客观描述字段：title / reqType / content / projectId / sourceType / reqClassId / stdClause / paramName。",
+    "② priority / dfxDimension / appealsDim / verifyMethod / userPersona / userTags 属『分析后才可填』——写在本文件里没问题，工具会自动把它们并入正文的【分析输入】段，不会写进请求体（否则服务端 400 REQ_FIELD_STAGE_LOCKED）。",
+    "③ ⛔ 不要写 paramValue / paramUom / verification：这是**登记时的死锁区**（填了 paramValue 就要求 verifyMethod 同时非空，而 verifyMethod 被阶段锁拦住 ⇒ 两头都堵）。工具会**本地硬拒**并告诉你改道办法；把量化要求写进 content 的【量化期望】段。",
+    "④ 下划线开头的键（_开头）是本工具/人用的元数据，不会进请求体。",
+    "⑤ 登记前必跑：node plm-req.cjs submit -f draft.json --dry-run"
+  ],
+
+  "title": "【<模块>】<现象短句>（<可辨识条件>）",
+  "reqType": "SR",
+  "content": "【现象】<在哪个页面、点什么、看到什么；写清与预期不符之处>\n【影响】<对谁有影响、影响什么（数据/流程/时间/合规）；是否已造成实际损失>\n【期望】<期望的正确行为；尽量可验收>\n【量化期望】<可选的量化口径：指标名/目标值/单位/如何判定（这一段的字段登记时填不进去，只能写在正文，分析人 ANALYZED 后补录）>\n【复现步骤】1) … 2) … 3) …\n【证据】<截图路径 / 页面 URL / 对象编号（REQ-/PRJ-/M- 等）/ 报错原文>\n【用户原话】<保留现场语言，便于分析人理解真实诉求>",
+
+  "projectId": 87,
+  "sourceType": "PLM_SELF",
+  "reqClassId": null,
+  "stdClause": null,
+
+  "priority": "MEDIUM",
+  "dfxDimension": "DFU",
+  "appealsDim": ["QUALITY"],
+  "verifyMethod": "DEMO",
+
+  "_source": {
+    "reporter": "<反馈人登录名或姓名>",
+    "role": "<其组织角色/项目角色>",
+    "channel": "<会话/邮件/群里反馈>",
+    "reportedAt": "<YYYY-MM-DD>",
+    "repeatCount": 1
+  },
+  "_triage": {
+    "isKnownDeviation": false,
+    "dedupChecked": "由 submit 自动执行",
+    "upgradeNeeded": false,
+    "note": "<分诊结论：真缺陷 / 用法问题 / 权限问题 / 业务前置 / 已知偏差>"
+  }
+}

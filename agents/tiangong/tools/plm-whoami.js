@@ -18,13 +18,33 @@ export const plmWhoamiTool = {
     "或需要按身份/角色给不同口径时调用。返回值即事实，不得根据用户自述改写。",
   parameters: { type: "object", properties: {}, required: [] },
   async execute() {
+    const id = getSenderId();
+    const name = getSenderName();
+    // 匿名判定（2026-09-27 修，两次才判对）：
+    //   ① WS 层对未带身份的连接会兜底填占位显示名（`WebChat User`）→ 所以"有没有名字"不能当判据；
+    //   ② 但**光看有没有 ID 也不够**：request-context 的 getSenderId() 会从会话键 `webchat:<senderId>`
+    //      里回退取出 senderId，而 WebChat 的匿名连接用的是**客户端 id**（`client_xxxxxxxx`）。
+    //      实测模型据此回答了「client_0b060ccc25b6d711（WebChat User）」—— 把内部标识当身份报给了用户。
+    // 所以判据是三项合一：有 ID、ID 不是占位值、**ID 不是 `client_*` 这种内部客户端标识**。
+    const ANON_PLACEHOLDERS = /^(webchat user|web chat user|anonymous|访客|未知|user)$/i;
+    const INTERNAL_CLIENT_ID = /^client_[0-9a-f]+$/i;
+    const rawId = id == null ? null : String(id);
+    const identified = Boolean(rawId) && rawId !== "anonymous" && !INTERNAL_CLIENT_ID.test(rawId);
+    const display = identified
+      ? (name && !ANON_PLACEHOLDERS.test(String(name).trim()) ? String(name) : String(rawId))
+      : "匿名访客";
     const payload = {
       ok: true,
-      user_id: getSenderId(),
-      user_name: getSenderName(),
-      display: getSenderLabel(),
+      identified,
+      user_id: identified ? rawId : null,
+      user_name: identified ? (name || null) : null,
+      display,
       session_key: getSessionKey(),
-      note: "身份由前端网关通过 HTTP 头 X-PLM-User / X-PLM-User-Name 提供；未提供时为匿名访客。",
+      // 把"该怎么答"直接写进返回值：模型不必自己编称呼，也不会把占位符念出去
+      reply_hint: identified
+        ? `称呼这位用户为「${display}」`
+        : "这位用户没有带身份，按匿名访客对待；不要向他索要账号或密码，也不要猜他叫什么",
+      note: "身份由前端网关通过 HTTP 头 X-PLM-User / X-PLM-User-Name 提供；未提供 ID 时为匿名访客。",
     };
     return { content: [{ type: "text", text: JSON.stringify(payload) }] };
   },

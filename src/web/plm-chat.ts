@@ -326,13 +326,14 @@ body {
       </div>
       <div class="messages" id="messages">
         <div class="welcome" id="welcome">
-          <h2>我是天工 PLM 的客服小工</h2>
-          <div>问流程、问字段、问单据、问权限都可以。举例：</div>
+          <h2>我是天工 PLM 的客服小天</h2>
+          <div>问流程、问字段、问单据、问权限都可以；有改进建议也可以直接说，我帮你整理成需求提给 PLM。举例：</div>
           <div class="chips">
             <span class="chip" data-q="新增料号在哪里操作？">新增料号在哪</span>
             <span class="chip" data-q="为什么我看不到某个按钮？">为什么看不到按钮</span>
             <span class="chip" data-q="ECR 和 ECO 有什么区别？">ECR/ECO 区别</span>
             <span class="chip" data-q="导出数据什么时候会走异步？">导出怎么走异步</span>
+            <span class="chip" data-q="我想提一个改进建议：BOM 界面每次都要重新筛选，很费时间。">提个改进建议</span>
             <span class="chip" data-q="你知道我是谁吗？">你知道我是谁吗</span>
           </div>
         </div>

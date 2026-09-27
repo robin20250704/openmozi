@@ -205,6 +205,29 @@ function envToMoziConfig(env) {
     };
   }
 
+  /**
+   * kimi-for-coding（2026-09-27 新增，小天专用）。
+   *
+   * 为什么需要这一段：pi 0.85 **内置**了 provider `kimi-coding`（baseUrl `https://api.kimi.com/coding`，
+   * anthropic-messages 协议，模型 id `kimi-for-coding`），所以 baseUrl 与模型清单都不用我们写；
+   * 我们只需要把 **key** 送到 runtime 的凭据库里。而 runtime 取 key 的路径之一是
+   * `config.providers[providerId].apiKey` —— 这一段就是补上那个入口（另一条路径是环境变量，
+   * 见 runtime.ts 的 providerApiKey()）。
+   *
+   * key 的来源：`agents/tiangong/.env` 的 `KIMI_CODING_API_KEY`。
+   * ⚠️ 这一项必须读 `process.env` 而不是本文件的 `env`：`env` 只来自 `runtime/openmozi/.env`，
+   *    而 agent 级 .env 是 **launcher 在 loadAndApply 之前**注入 process.env 的
+   *    （`applyEnvToProcess` 只补 undefined 的键，顺序上晚于注入，所以这里必须显式读进程环境）。
+   * 该键与 DSH（`~/.dsh/.credentials.yaml`）同名，**从 DSH 拷的就是同一个键名**，便于对照维护。
+   */
+  const kimiKey = process.env.KIMI_CODING_API_KEY || process.env.KIMI_API_KEY || env.KIMI_CODING_API_KEY;
+  if (!isPlaceholder(kimiKey)) {
+    config.providers["kimi-coding"] = {
+      apiKey: kimiKey,
+      // baseUrl / models 刻意不写：pi 内置 provider 已有权威默认值（写了反而会和内置清单冲突）
+    };
+  }
+
   // ===== IM Channels =====
   // 只有当 WECOM_ENABLED=true + 至少 CorpID 不是占位符时，才注入 channels.wecom
   // （OpenMozi schema 对 agentId 等字段强类型校验，字符串占位符会导致 NaN）

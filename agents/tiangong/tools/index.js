@@ -1,15 +1,37 @@
 // agents/tiangong/tools/index.js
 //
-// 天工 PLM 客服的工具集入口（本批最小形态）。
+// 小天（天工 PLM 客服）的工具集入口。
 //
-// 本批 3 个工具的目的**不是**做完 PLM 客服，而是：
-//   ① 证明第三个 agent 有自己的工具集（与 junwuyou / yuanyi 零交集 → 工具隔离断言 A4 可判定）；
-//   ② 证明工具的数据来自**自己的**后端（53112）而不是君无忧（53000/35801）或元一（53100）；
-//   ③ 证明需求 4 的身份头链路端到端可达（plm_whoami 是那条链路的观测面）。
+// 工具面按用户 2026-09-27 的要求收紧为三类，**不含任何写文件/写代码工具**：
+//   ① 参考资料只读：`plm_read_reference`（路径锁在 references/ 内，永不可写）
+//   ② 需求填写族：`plm_check_env` / `plm_whoami_plm` / `plm_list_projects` / `plm_list_classes` /
+//      `plm_list_requirements` / `plm_get_requirement` / `plm_dedup_requirement` /
+//      `plm_submit_requirement`（唯一会改动 PLM 数据的工具，默认 dry-run）/ `plm_track_requirements`
+//   ③ 客服事实与身份观测：`plm_faq_search` / `plm_get_current_time` / `plm_whoami`
 //
-// 动态 import（L-042）：这些模块读 env（TIANGONG_API_URL 等），必须等 launcher 注入 env 后再加载。
+// pi 的内置编码工具（read / write / edit / bash / glob / grep / ls…）由装配期的
+// `noTools: "builtin"` 关闭（见 runtime.ts）—— 所以"删掉写文件工具"不是靠提示词自律，
+// 而是**工具根本没注册**（本文件与描述符 toolset 是唯一的工具来源，A4/A5 断言守着这一点）。
+//
+// 动态 import（L-042）：这些模块读 env（TIANGONG_API_URL / PLM_* 等），
+// 必须等 launcher 注入 env 之后再加载，所以**不能**在文件顶部静态 import。
 
 export const tools = [
+  // ① 只读参考资料
+  (await import("./plm-read-reference.js")).plmReadReferenceTool,
+
+  // ② 需求填写族（PLM 登记器官）
+  (await import("./plm-requirements.js")).plmCheckEnvTool,
+  (await import("./plm-requirements.js")).plmWhoamiPlmTool,
+  (await import("./plm-requirements.js")).plmListProjectsTool,
+  (await import("./plm-requirements.js")).plmListClassesTool,
+  (await import("./plm-requirements.js")).plmListRequirementsTool,
+  (await import("./plm-requirements.js")).plmGetRequirementTool,
+  (await import("./plm-requirements.js")).plmDedupRequirementTool,
+  (await import("./plm-requirements.js")).plmSubmitRequirementTool,
+  (await import("./plm-requirements.js")).plmTrackRequirementsTool,
+
+  // ③ 客服事实与身份观测
   (await import("./plm-faq-search.js")).plmFaqSearchTool,
   (await import("./plm-get-current-time.js")).plmGetCurrentTimeTool,
   (await import("./plm-whoami.js")).plmWhoamiTool,

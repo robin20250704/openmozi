@@ -149,23 +149,55 @@ export class AgentRuntime {
     return p;
   }
 
-  /** 取 MiniMax API key（优先 config.providers，回退 MINIMAX_API_KEY 环境变量） */
-  private minimaxApiKey(): string | undefined {
-    return (
+  /**
+   * 取当前 provider 的 API key。
+   *
+   * 2026-09-27 改（小天接入 kimi-for-coding 时暴露的硬编码）：
+   * 旧版把 key 来源写死成 MiniMax（`getApiKeyForProvider("minimax-cn") || MINIMAX_API_KEY`），
+   * 于是**任何非 MiniMax 的 provider 都拿不到 key** —— 症状不是"报错"，而是模型鉴权失败后
+   * 本轮零输出（配合 L-127 的空回答守卫才可见）。现在改为"按 provider 定环境键名"：
+   *   · 先 config.providers（分层配置里的键）
+   *   · 再按 provider 的约定环境变量名（业务侧 provider → 厂商环境变量）
+   *   · 最后 MiniMax 家族兜底（历史部署只配了 MINIMAX_API_KEY）
+   */
+  private providerApiKey(providerId: string): string | undefined {
+    const p = providerId;
+    const envFallbacks: Record<string, string[]> = {
+      "kimi-coding": ["KIMI_CODING_API_KEY", "KIMI_API_KEY"],
+      minimax: ["MINIMAX_API_KEY"],
+      "minimax-cn": ["MINIMAX_CN_API_KEY", "MINIMAX_API_KEY"],
+      moonshotai: ["MOONSHOT_API_KEY"],
+      "moonshotai-cn": ["MOONSHOT_API_KEY"],
+      deepseek: ["DEEPSEEK_API_KEY"],
+    };
+    const fromConfig =
+      getApiKeyForProvider(p) ||
       getApiKeyForProvider(this.config.provider) ||
       getApiKeyForProvider("minimax") ||
-      getApiKeyForProvider("minimax-cn") ||
-      process.env.MINIMAX_API_KEY
-    );
+      getApiKeyForProvider("minimax-cn");
+    if (fromConfig) return fromConfig;
+    for (const name of envFallbacks[p] ?? []) {
+      if (process.env[name]) return process.env[name];
+    }
+    // 兜底：MiniMax 家族（历史部署里 provider 名可能是 custom-anthropic 等）
+    if (p === "minimax" || p === "minimax-cn") return process.env.MINIMAX_API_KEY;
+    return undefined;
   }
 
-  /** 惰性创建共享 ModelRuntime：注入 minimax-cn 凭据（env 解耦，走 InMemoryCredentialStore） */
+  /** 惰性创建共享 ModelRuntime：按 provider 注入凭据（env 解耦，走 InMemoryCredentialStore） */
   private async getOrCreateModelRuntime(): Promise<ModelRuntime> {
     if (this._modelRuntime) return this._modelRuntime;
     const creds = new InMemoryCredentialStore();
-    const key = this.minimaxApiKey();
+    const piProvider = this.piProviderId();
+    const key = this.providerApiKey(piProvider);
     if (key) {
-      await creds.modify("minimax-cn", () => Promise.resolve({ type: "api_key" as const, key }));
+      await creds.modify(piProvider, () => Promise.resolve({ type: "api_key" as const, key }));
+    } else {
+      // 不要把"没拿到 key"咽下去：这正是"模型零输出"的上游成因之一（L-127）
+      logger.warn(
+        { agentId: this.config.agentId, provider: piProvider, model: this.config.model },
+        "未取到模型 API key —— 本 agent 的模型调用会失败（检查 config.providers 或该 provider 的环境变量）"
+      );
     }
     this._modelRuntime = await ModelRuntime.create({ credentials: creds });
     return this._modelRuntime;

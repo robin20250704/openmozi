@@ -36,3 +36,7 @@ package-lock.json
 .verify-sessions/
 # P4: 多 agent 的运行时工作目录(每个 agent 一份 .pi/SYSTEM.md + AGENTS.md,由 launcher 生成)
 .agents/
+# P5 小天（天工PLM客服）：agent 运行目录下的运行态产物（token 缓存/草稿/KB 会话数据），不进版本库
+agents/*/.cache/
+agents/*/.creature/
+agents/*/references/kb/plm-registration-ledger.md
