@@ -50,6 +50,27 @@ export async function listCategories() {
   return request("GET", "/api/faq/categories");
 }
 
+/**
+ * 追加一条 FAQ 候选（答客闭环的写入口）。
+ *
+ * 边界：这是本 agent **唯一**的写操作，且它只能往候选台账追加一行，
+ * 碰不到 faq.json —— 知识库内容只能由人并入。让被考核者自己改考核题库，是这条约束的全部理由。
+ * 不传提问人身份：台账不需要"谁问的"就能聚类，而存了就是多一份个人信息。
+ */
+export async function proposeFaqCandidate({ question, category, answerPoints }) {
+  return request("POST", "/api/faq/candidates", { body: { question, category, answerPoints } });
+}
+
+/** FAQ 候选聚类摘要：达阈值的归类带 FAQ 草稿（草稿给人工核对，不自动入库） */
+export async function faqCandidateDigest(threshold) {
+  return request("GET", "/api/faq/candidates/digest", { query: { threshold } });
+}
+
+/** 最近若干条候选（自查"我刚才记进去没有"——L-133：写操作要能自证） */
+export async function listFaqCandidates(limit = 20) {
+  return request("GET", "/api/faq/candidates", { query: { limit } });
+}
+
 export async function healthCheck() {
   try {
     const res = await request("GET", "/health", { timeoutMs: 3000 });
