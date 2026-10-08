@@ -969,6 +969,24 @@ export class AgentRuntime {
       throw promptError;
     }
 
+    // ── 收尾：把 DSML 过滤器的"待定尾巴"吐出来（2026-10-08 实测确定性缺陷）──
+    // `dsmlFilter` 为了防 DSML 开标记被跨增量切开，会把**末尾 7 个字符**留在 dsmlPending
+    // 里等下一个增量来判；可**流结束时没有"下一个增量"**，于是每个答案的结尾都被吃掉。
+    // 现象：Web 端「你是「plm.zha」（本该是 …plm.zhang」），短答案几乎全毁；
+    // 只有当尾部恰好还有空白/标点增量把 pending 冲掉时才完整 —— 所以它**时红时绿**，
+    // 看起来像网络抖动，实际是转发链路稳定丢字（诊断见 scripts/diag-truncation.mjs：
+    // 流式累加 20 字 vs session 最终正文 28 字，差的就是最后 7 个字符）。
+    // 放行条件：不在 DSML 块内，且待定尾巴**不是** DSML_OPEN 的前缀（是前缀说明它可能
+    // 是个被切开的开标记，放出去会把工具调用标记泄给终端客户，宁可丢）。
+    // ⚠️ 必须**直接 yield**：此刻上方的排空循环早已结束，push 进 eventQueue 就再没人取
+    // （首版就写成 push，结果诊断里仍是 streamed 4 / final 12 —— 又一次"看起来改了其实没生效"）。
+    if (!dsmlInBlock && dsmlPending.length > 0 && !DSML_OPEN.startsWith(dsmlPending)) {
+      const tail = dsmlPending;
+      dsmlPending = "";
+      emittedText = true;
+      yield { type: "text_delta", delta: tail };
+    }
+
     // 空回答守卫（见订阅处的注释）：既没出文本、也没调过工具，且没有显式异常 ——
     // 这不是"模型选择不说话"，而是**上游失败**。必须让调用方看到错误，而不是收到空串。
     if (!emittedText && !emittedTool) {

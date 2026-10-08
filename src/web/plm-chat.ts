@@ -150,11 +150,14 @@ body {
   white-space: nowrap;
 }
 .spacer { flex: 1; }
-/* 身份胶囊：需求 4 的可视化落点（用户必须能看见"agent 认为我是谁"） */
+/* 身份胶囊：需求 4 的可视化落点（用户必须能看见"agent 认为我是谁"）
+ * ⚠ 2026-09-28 用户要求去掉"设置身份"按钮与身份编辑面板，身份只由前端网关注入（头）
+ * 或 URL 参数决定。因此这里**不能再有 cursor:pointer** —— 不可点的元素给指针光标
+ * 属于"假可供性"：看上去能点、点了没反应，比没有更让人困惑。 */
 .identity {
   display: flex; align-items: center; gap: 8px;
   background: var(--sidebar-hover); border: 1px solid var(--border-dark);
-  border-radius: 999px; padding: 4px 12px 4px 4px; cursor: pointer;
+  border-radius: 999px; padding: 4px 12px 4px 4px;
   color: #e2e8f0; font-size: 12.5px;
 }
 .identity .avatar {
@@ -196,13 +199,9 @@ body {
 .btn.primary { background: var(--primary); border-color: var(--primary); color: #fff; }
 .btn.primary:hover { background: var(--primary-dark); color: #fff; }
 .btn:disabled { opacity: .5; cursor: not-allowed; }
-.ctx-bar {
-  background: var(--sidebar); color: #fff; border-radius: 8px;
-  padding: 10px 16px; font-size: 12.5px;
-  display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
-}
-.ctx-bar .kv { display: flex; gap: 6px; align-items: center; }
-.ctx-bar .kv span { color: var(--text-faint); }
+/* 身份上下文深色横条（.ctx-bar）已按 2026-09-28 用户要求**整条删除**（"那个黑色方框的内容全部可以去掉"）。
+ * 身份仍然必须"可见" —— 落点收回到顶栏胶囊 id-name/id-code 与会话区 side-conn/conn-text，
+ * 删除判据由 scripts/verify-tiangong.mjs 的 A29 守着，防止被无意加回来。 */
 .pill { padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; }
 .pill.ok { background: #dcfce7; color: var(--ok); }
 .pill.warn { background: #fef3c7; color: var(--warn); }
@@ -249,18 +248,15 @@ body {
   font-family: inherit; font-size: 13px; line-height: 1.5; resize: none; max-height: 140px; background: #fff; color: var(--text);
 }
 .composer textarea:focus { border-color: var(--primary); outline: 2px dashed var(--info); outline-offset: 1px; }
-.hint { font-size: 11.5px; color: var(--text-faint); padding: 0 12px 10px; background: #f8fafc; }
+/* 输入框下方的操作说明行（.hint）与页面最下方的落款行（.foot）
+ * 已按 2026-09-28 用户要求删除（"输入框下面的文字描述也可以去掉"／"最下部那一行文字也可以去掉"）。
+ * 连接状态由会话区顶部的连接点 + "已连接客服 tiangong" 承载，未被这两个删除牵连。 */
 .banner { border-radius: 6px; padding: 8px 12px; font-size: 12.5px; display: none; }
 .banner.show { display: block; }
 .banner.warn { background: #fef3c7; color: #92400e; border: 1px solid #fde68a; }
 .banner.err { background: #fee2e2; color: #991b1b; border: 1px solid #fecaca; }
-/* 身份面板（无弹窗录入：与 PLM §6.1 一致，用右侧常驻卡而不是 modal） */
-.id-panel { display: none; }
-.id-panel.show { display: block; }
-.id-panel .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; margin-top: 8px; }
-.id-panel label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--text-muted); }
-.id-panel input { border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; font-size: 13px; min-width: 200px; }
-.foot { font-size: 11.5px; color: var(--text-faint); }
+/* 身份编辑面板（.id-panel）随"设置身份"按钮一并删除：身份只由前端网关注入的请求头或
+ * URL 参数决定，页面不再提供手工改写入口（改写入口会让"谁是谁"变成可随手篡改的假事实）。 */
 @media (max-width: 900px) {
   .sidebar { display: none; }
   .topbar-search { display: none; }
@@ -273,7 +269,7 @@ body {
   <input class="topbar-search" placeholder="全局搜索（本页为客服入口，搜索在 PLM 主界面使用）" disabled>
   <span class="ai-badge">AI 客服</span>
   <div class="spacer"></div>
-  <div class="identity" id="identity" title="点击设置/查看当前身份">
+  <div class="identity" id="identity" title="当前提问者身份（由前端网关的 X-PLM-User / X-PLM-User-Name 请求头决定，页面不可改写）">
     <div class="avatar" id="id-avatar">匿</div>
     <div class="who">
       <b id="id-name">未提供身份</b>
@@ -306,36 +302,16 @@ body {
     <div class="page-head">
       <div>
         <h1>天工 PLM 客服</h1>
-        <div class="sub">问 PLM 的流程、字段、单据、权限与快捷键。答不了会明确说没收录，不编。</div>
       </div>
       <div>
-        <button class="btn" id="btn-identity">设置身份</button>
         <button class="btn" id="btn-new2">新建对话</button>
       </div>
     </div>
 
-    <div class="ctx-bar">
-      <div class="kv"><span>提问者</span><b id="ctx-user">匿名访客</b></div>
-      <div class="kv"><span>身份来源</span><b id="ctx-source">未提供</b></div>
-      <div class="kv"><span>客服</span><b>${esc(agentId)}</b></div>
-      <div class="kv"><span>连接</span><span class="pill muted" id="ctx-conn">连接中</span></div>
-    </div>
+    <!-- 身份上下文黑条（提问者 / 身份来源 / 客服 / 连接）与身份编辑面板：
+         2026-09-28 用户要求整条删除。见上方 CSS 注释与 verify-tiangong.mjs A29。 -->
 
     <div class="banner warn" id="banner"></div>
-
-    <div class="card id-panel" id="id-panel">
-      <b>身份（对应 HTTP 头 X-PLM-User / X-PLM-User-Name）</b>
-      <div class="sub" style="color:var(--text-muted);font-size:12.5px;margin-top:4px">
-        生产环境下身份由**前端网关**填充请求头；本机自测可用下面的入口随连接一起带上（浏览器 WebSocket 无法自定义头）。
-        若服务端配置为只认请求头（PLM_REQUIRE_HEADER_IDENTITY=1），这里填的会被忽略，页面会明确提示。
-      </div>
-      <div class="row">
-        <label>用户 ID<input id="in-id" placeholder="如 plm.zhang" value="${esc(initial.id)}"></label>
-        <label>显示名<input id="in-name" placeholder="如 张工" value="${esc(initial.name)}"></label>
-        <button class="btn primary" id="btn-apply-id">应用并重连</button>
-        <button class="btn" id="btn-clear-id">清除（匿名）</button>
-      </div>
-    </div>
 
     <div class="card chat-card">
       <div class="chat-head">
@@ -363,9 +339,8 @@ body {
         <button class="btn primary" id="send">发送</button>
         <button class="btn" id="cancel" style="display:none">停止</button>
       </div>
-      <div class="hint" id="hint">Enter 发送 · Shift+Enter 换行 · 回答来自 PLM 知识库，未收录会明确说明</div>
     </div>
-    <div class="foot">天工 PLM 客服 · Web 入口（本机）· 同一份知识库也服务 QQ 渠道</div>
+    <!-- 操作说明行（Enter 发送…）与页脚落款行按 2026-09-28 用户要求删除 -->
   </main>
 </div>
 
@@ -385,7 +360,10 @@ body {
   var connected = false, agentEcho = null, serverUser = null;
   var identity = { id: "", name: "" };
 
-  /** 身份取值顺序：URL 参数（?user=&name=）> localStorage > 网关渲染进来的头身份 */
+  /** 身份取值顺序：URL 参数（?user=&name=，本机自测回落）> 网关注入的头身份。
+   *  localStorage 仍然读、但**不再写**（"设置身份"按钮连同其面板已删）：
+   *  老浏览器档案里残留的身份不该被静默丢弃，同时页面不再提供新的写入途径 ——
+   *  身份只有一个来源（前端网关的请求头），这才是需求 ④ 的口径。 */
   function decodeMaybe(v) {
     if (!v) return "";
     return NEEDS_ESCAPE.test(v) ? decodeURIComponent(v) : v;
@@ -400,14 +378,11 @@ body {
     return { id: id, name: name };
   }
 
-  function saveIdentity(id, name) {
-    try { localStorage.setItem("plm_chat_identity", JSON.stringify({ id: id, name: name })); } catch (e) {}
-  }
-
   function sessionStorageKey() {
     return "plm_chat_session:" + AGENT + ":" + (identity.id || "anon");
   }
 
+  /** 顶栏身份胶囊：身份唯一可见落点（黑条删除后，需求 ④ 的"用户必须看得见自己是谁"靠它）。 */
   function renderIdentity() {
     var hasId = !!identity.id, hasName = !!identity.name;
     var label = hasName ? identity.name : (hasId ? identity.id : "未提供身份");
@@ -415,10 +390,6 @@ body {
     $("id-name").textContent = label;
     $("id-code").textContent = code;
     $("id-avatar").textContent = (hasName || hasId) ? (label.slice(0, 1) || "?") : "匿";
-    $("ctx-user").textContent = hasName && hasId ? (identity.name + "（" + identity.id + "）") : (hasId || hasName ? (identity.name || identity.id) : "匿名访客");
-    $("ctx-source").textContent = serverUser
-      ? ({ header: "HTTP 头（网关注入）", query: "查询参数（本机自测回落）", none: "未提供" }[serverUser.source] || serverUser.source)
-      : "未提供";
   }
 
   function showBanner(kind, text) {
@@ -432,9 +403,28 @@ body {
     connected = ok;
     $("conn-dot").className = "dot" + (ok ? "" : " off");
     $("conn-text").textContent = text;
-    $("ctx-conn").className = "pill " + (ok ? "ok" : "err");
-    $("ctx-conn").textContent = ok ? "已连接" : "未连接";
     $("side-conn").textContent = ok ? "已连接" : "未连接";
+  }
+
+  /**
+   * 从当前页面路径推导 WebSocket 路径。
+   *
+   * 为什么要单独一个函数并逐形态实测：这条逻辑在两版里都写错过（见 connect() 里的事故注释），
+   * 而它的输入空间很小，值得穷举验证（判据脚本 check-ws-paths.mjs 会把它抽出来在 5 种路径上跑）。
+   *
+   *   以斜杠结尾（/tiangong/、/plm/tiangong/、/）→ 去掉末尾斜杠 + /ws
+   *   不以斜杠结尾（/tiangong、/、/plm/tiangong） → 去掉最后一段 + /ws
+   *
+   * 反面用例（必须仍然正确）：/tiangong 直连时，最后那个斜杠的**下标是 0**，
+   * 那是路径开头的斜杠而不是分隔符 —— 用 cut > 0 之类的判定会把整段路径丢掉。
+   */
+  function wsPathForPage(pathname) {
+    var p = pathname || "/";
+    if (p.length > 1 && p.charAt(p.length - 1) === "/") {
+      return p.slice(0, -1) + "/ws";
+    }
+    var cut = p.lastIndexOf("/");
+    return (cut > 0 ? p.slice(0, cut) : "") + "/ws";
   }
 
   function connect() {
@@ -448,7 +438,42 @@ body {
       if (identity.id) q.set("user", identity.id);
       if (identity.name) q.set("name", identity.name);
     }
-    var url = proto + "//" + location.host + "/ws?" + q.toString();
+    // WebSocket 地址必须**相对于页面自身所在的路径**拼，不能写死根路径 "/ws"。
+    //
+    // 为什么（2026-09-28 实测，用户现场："从 PLM 访问显示连接已断开，直连 33000 正常"）：
+    //   原写法是 proto + "//" + location.host + "/ws?…"，即永远连 origin 的根 "/ws"。
+    //   · 直连网关 http://127.0.0.1:33000/tiangong  → ws://127.0.0.1:33000/ws      ✅
+    //   · 经 PLM 门面 http://…:5174/tiangong/       → ws://…:5174/ws               ❌
+    //   后者落到 PLM 自己的 SPA 路由上（返回 200 + HTML，不是 101 升级），
+    //   页面于是显示"连接已断开，正在重试…"，而 PLM 侧一切正常。
+    //   两种访问方式 origin 不同是**本该如此**的；出问题的是"地址与页面路径脱钩"。
+    //
+    // 修法：从当前位置推导"页面所在目录"，再拼 ws。
+    //   location.pathname 去掉末尾斜杠后，砍掉**最后一个斜杠及其之后**的部分 ⇒ 部署前缀。
+    //   （每个部署形态都实测过，见下）
+    //     /tiangong/  → /tiangong → ""        → /ws            ← 直连网关（页面在同名前缀下，ws 在根）
+    //     /tiangong   → /tiangong → ""        → /ws
+    //     /           → ""        → ""        → /ws
+    //     /plm/tiangong/ → /plm/tiangong → /plm → /plm/ws      ← 若将来再加一层前缀也对
+    //
+    // ⚠ 不要用「正则去掉最后一段」那种写法（首版就是这么写的，实测是错的）：
+    //   那个正则是**贪婪**的 —— 字符类可以吃掉 "tiangong"，前面的斜杠去匹配开头那个斜杠，
+    //   于是 "/tiangong" → ""（整条路径被吃光），算出 "/ws"，
+    //   而 PLM 门面下 /ws 根本不存在 ⇒ 浏览器连不上、页面永远停在"连接中"。
+    //   （第二版改用 lastIndexOf 仍错：路径以斜杠结尾时，最后那个斜杠的**下标**恰为 0
+    //     —— 那是路径开头的斜杠，不是分隔符；用 cut 大于 0 判定就把 /tiangong 全丢了。
+    //     两版都栽在"凭直觉写路径处理"上，最终改成**按形态分支**并逐形态实测。）
+    //
+    // 规律（每种页面形态都实测过）：
+    //   以斜杠结尾（/tiangong/、/plm/tiangong/、/）→ ws = 去掉末尾斜杠 + /ws
+    //   不以斜杠结尾（/tiangong，即直连网关未跳转时）→ ws = 去掉最后一段 + /ws
+    // ⚠ 本段位于**页面模板字面量内部**：
+    //   · 注释里不要出现反引号（会提前闭合模板字符串）；
+    //   · 正则里的反斜杠必须**双写**（模板串会吃掉一层，否则生成出 //+$/ 这种语法错，
+    //     浏览器直接 SyntaxError、整个内联脚本不执行——实测踩过）。
+    //   · 模板字面量内不能出现美元加大括号，故这里用字符串拼接而非模板串。
+    var wsPath = wsPathForPage(location.pathname);
+    var url = proto + "//" + location.host + wsPath + "?" + q.toString();
     setConn(false, "正在连接客服…");
     try { ws = new WebSocket(url); } catch (e) { setConn(false, "连接失败"); showBanner("err", "无法建立连接：" + e.message); return; }
 
@@ -486,9 +511,9 @@ body {
       if (payload.agentRequested && payload.agentMatched === false) {
         showBanner("warn", "客服 " + payload.agentRequested + " 不存在，已切到默认客服 " + payload.agent + "。");
       } else if (identity.id && serverUser && !serverUser.id) {
-        showBanner("warn", "服务端未收到你设置的身份（它只接受由前端网关注入的请求头 X-PLM-User）。本次按匿名处理，回答不会按你的身份给出。");
+        showBanner("warn", "服务端未收到你的身份（它只接受由前端网关注入的请求头 X-PLM-User）。本次按匿名处理，回答不会按你的身份给出。");
       } else if (identity.id && serverUser && serverUser.id && serverUser.id !== identity.id && serverUser.source === "header") {
-        showBanner("warn", "服务端收到的身份是 " + serverUser.id + "（来自网关请求头），与你本地填的 " + identity.id + " 不同——以服务端为准。");
+        showBanner("warn", "服务端收到的身份是 " + serverUser.id + "（来自网关请求头），与本页带入的 " + identity.id + " 不同——以服务端为准。");
       } else if (identity.id && serverUser && serverUser.id) {
         hideBanner();
       }
@@ -626,23 +651,10 @@ body {
   }
   $("nav-new").addEventListener("click", function (e) { e.preventDefault(); newChat(); });
   $("btn-new2").addEventListener("click", newChat);
-  $("identity").addEventListener("click", function () { $("id-panel").classList.toggle("show"); });
-  $("btn-identity").addEventListener("click", function () { $("id-panel").classList.toggle("show"); });
-  $("btn-apply-id").addEventListener("click", function () {
-    identity = { id: $("in-id").value.trim(), name: $("in-name").value.trim() };
-    saveIdentity(identity.id, identity.name);
-    renderIdentity();
-    confirmRebind();
-  });
-  $("btn-clear-id").addEventListener("click", function () {
-    identity = { id: "", name: "" }; saveIdentity("", "");
-    $("in-id").value = ""; $("in-name").value = "";
-    renderIdentity(); confirmRebind();
-  });
-  function confirmRebind() {
-    if (streaming) { showBanner("warn", "正在回答中，等这轮结束后会按新身份重连。"); return; }
-    connect();
-  }
+  // 「设置身份」按钮与身份编辑面板及其事件绑定已于 2026-09-28 一并删除。
+  // 身份改写的正规入口：前端网关注入 X-PLM-User / X-PLM-User-Name，或本机自测用
+  // /tiangong?user=<id>&name=<显示名>（此时应把 PLM_REQUIRE_HEADER_IDENTITY 设为 1 以免生产回落）。
+  // 顺带删掉的 confirmRebind() 原本只服务于"改完身份要重连"，没有别的调用方。
 
   // ===== 启动 =====
   identity = readIdentity();

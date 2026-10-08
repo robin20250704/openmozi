@@ -28,6 +28,10 @@ import type { AgentRegistry } from "../agents/registry.js";
 import type { MoziConfig, ProviderId } from "../types/index.js";
 import { getAllProviders } from "../providers/index.js";
 import { getAllChannels } from "../channels/index.js";
+// 页面挂载前缀的唯一事实源：ws 端点必须与该前缀下的页面路径一致。
+// 为什么从 plm-chat 引而不是在这里再写一份字面量：本次缺陷的根因就是
+// "同一个契约两处各写一份字面量"，一处改了另一处不知道（页面改成 /tiangong/ws，服务端仍是 /ws）。
+import { PLM_CHAT_ROUTE } from "./plm-chat.js";
 import { getSessionStore, type TranscriptMessage } from "../sessions/index.js";
 import { join } from "path";
 import { homedir } from "os";
@@ -192,13 +196,39 @@ export class WsServer {
     this.heartbeatInterval = options.heartbeatInterval ?? 30000;
     this.clientTimeout = options.clientTimeout ?? 60000;
 
-    this.wss = new WebSocketServer({
-      server: options.server,
-      path: "/ws",
-    });
-
+    // WebSocket 服务端**不能只认根路径 `/ws`**。
+    //
+    // 为什么（2026-09-28 实测，用户现场："从 PLM 访问显示 连接已断开，直连 33000 正常"）：
+    //   小天页面被 PLM 门面按前缀挂载（`/tiangong/`），WS 地址若与页面路径一致就是
+    //   `/tiangong/ws`；而这里原先写死 `path: "/ws"`，于是同一个 ws 服务器对
+    //   `/tiangong/ws` 直接回 **400（不是升级失败，是 ws 库的路径不匹配）**。
+    //   实测过：经映射口做一次真实握手 → `NO_UPGRADE status=400`。
+    //   根因形态：**同一个契约（WS 端点）在两处各写了一份字面量**，一处改了另一处不知道。
+    //
+    // 修法：先用 `noServer` 接管升级；路径判定与**页面侧用同一条规则**——
+    //   即"当前部署前缀下应有的 ws 路径" = 页面所在目录 + "/ws"。
+    //   本模块是单例、只在启动时装配一次，故在升级时按请求推导前缀：
+    //   取请求路径的最后一段之前的部分作为前缀，要求它等于 `/` 或 `/tiangong`；
+    //   于是 `/ws`、`/tiangong/ws` 都接受，而 `/nope/ws` 一律拒绝。
+    //   为什么不做"凡以 /ws 结尾都放行"（首版就是这么写的）：那样任何路径都能建连，
+    //   等于把"路径即契约"这条约束删掉了 —— 反向实例（/nope/ws）立刻把它抓出来。
+    this.wss = new WebSocketServer({ noServer: true });
     this.wss.on("connection", (ws, req) => {
       this.handleConnection(ws, req);
+    });
+
+    options.server?.on("upgrade", (req, socket, head) => {
+      const pathname = (req.url ?? "").split("?")[0] ?? "";
+      // 允许的 ws 路径：根部署 `/ws`，或小天页面被挂在前缀下的 `/tiangong/ws`
+      const allowed = new Set(["/ws", `/${PLM_CHAT_ROUTE.replace(/^\/+|\/+$/g, "")}/ws`]);
+      if (!allowed.has(pathname)) {
+        // 与 ws 库默认行为一致：非本服务器的升级请求直接断开，不留下悬挂连接
+        socket.destroy();
+        return;
+      }
+      this.wss.handleUpgrade(req, socket, head, (ws) => {
+        this.wss.emit("connection", ws, req);
+      });
     });
 
     // 心跳检测
@@ -233,8 +263,20 @@ export class WsServer {
     };
 
     this.clients.set(clientId, client);
+    // 记录**升级请求的原始 URL**：`agentMatched:false` 有两种完全不同的成因
+    // ——「没带 ?agent=」与「带了但没命中」，只记 matched 分不出来（本次排障就卡在这）。
+    // 原始 URL 是唯一的判别证据，且它在日志里是可逐字比对的字符串。
     logger.info(
-      { clientId, agentId: selection.agentId, agentMatched: selection.matched, sessionKey, userSource: user.source, userId: user.id },
+      {
+        clientId,
+        agentId: selection.agentId,
+        agentMatched: selection.matched,
+        requested: selection.requested,
+        upgradeUrl: req?.url,
+        sessionKey,
+        userSource: user.source,
+        userId: user.id,
+      },
       "Client connected"
     );
 
