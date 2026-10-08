@@ -20,6 +20,7 @@
     "plm_submit_requirement",
     "plm_track_requirements",
     "plm_faq_search",
+    "plm_faq_propose",
     "plm_get_current_time",
     "plm_whoami"
   ],
@@ -32,5 +33,5 @@
     "path": "/tiangong",
     "title": "天工 PLM 客服"
   },
-  "note": "① accountRoutes 由 runtime/openmozi/.env 的 AGENT_ROUTES 声明（如 qq:<appId>=tiangong）。② allowedOrigins 只管**业务 HTTP 客户端**（本 agent 的知识库后端 53112）；打 53000/35801（君无忧）或 53100（元一）会被数据域边界拒（C-P4-5）。模型调用不走这一层（pi provider 直连），所以 kimi-coding 的域名不需要写进白名单。③ 工具名一律带 plm_ 前缀：与另两个 agent 的工具名零交集是工具隔离断言（A4）的强判据。④ llmProfile 是**描述符级模型档**（assemble.ts 用它覆盖全局 defaultProvider/defaultModel），小天用 kimi-for-coding。⑤ 本批按用户要求**不提供任何写文件/写代码工具**：文件类只有 plm_read_reference（只读 + 强制留在 references 目录内），需求登记只经 plm_submit_requirement（内部先查重、支持 dry-run）。"
+  "note": "① accountRoutes 由 runtime/openmozi/.env 的 AGENT_ROUTES 声明（如 qq:<appId>=tiangong）。② allowedOrigins 只管**业务 HTTP 客户端**（本 agent 的知识库后端 53112）；打 53000/35801（君无忧）或 53100（元一）会被数据域边界拒（C-P4-5）。模型调用不走这一层（pi provider 直连），所以 kimi-coding 的域名不需要写进白名单。③ 工具名一律带 plm_ 前缀：与另两个 agent 的工具名零交集是工具隔离断言（A4）的强判据。④ llmProfile 是**描述符级模型档**（assemble.ts 用它覆盖全局 defaultProvider/defaultModel），小天用 kimi-for-coding。⑤ 本批按用户要求**不提供任何写文件/写代码工具**：文件类只有 plm_read_reference（只读 + 强制留在 references 目录内），需求登记只经 plm_submit_requirement（内部先查重、支持 dry-run）。⑥ 唯一的写工具是 plm_faq_propose（2026-09-28 新增，14 个）：它只往 53112 的**候选台账**追加一行（问法+归类+答案要点），碰不到 faq.json；同一归类攒够阈值（默认 3 种不同问法，同问重复不占额度）才返回 FAQ 草稿，由人工核对后并入知识库——不允许 agent 自行改写对外口径。"
 }

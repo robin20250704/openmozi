@@ -39,4 +39,6 @@ package-lock.json
 # P5 小天（天工PLM客服）：agent 运行目录下的运行态产物（token 缓存/草稿/KB 会话数据），不进版本库
 agents/*/.cache/
 agents/*/.creature/
+# 天工 FAQ 候选台账（append-only 事件流；含客户原话，属于运行期数据不入库）
+agents/tiangong/data/faq-candidates.jsonl
 agents/*/references/kb/plm-registration-ledger.md
