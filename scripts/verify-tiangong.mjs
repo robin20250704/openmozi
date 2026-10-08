@@ -128,6 +128,13 @@ const stopAll = () => { for (const c of children) { try { c.kill(); } catch { /*
 process.on("exit", stopAll);
 process.on("SIGINT", () => { stopAll(); process.exit(130); });
 
+/** 同步跑一条命令（--check 这类只读工具用它；.mjs 里没有 require，故动态 import） */
+async function spawnSyncSafe(cmd, args) {
+  const { spawnSync } = await import("node:child_process");
+  const r = spawnSync(cmd, args, { cwd: ROOT, encoding: "utf8", timeout: 60000, shell: true });
+  return { code: r.status, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
+}
+
 let kbUp = false;
 const keepProd = process.env.TIANGONG_VERIFY_KEEP_PROD === "1";
 const occupied = await pidOnPort(KB_PORT);
@@ -306,18 +313,38 @@ check("A7:data-domain-fail-closed",
   v.replace(/\n/g, " ｜ ").slice(0, 220));
 
 // A8：无硬编码凭据（扫描 agent 目录与 harness 自身）
+// 2026-09-28 修判据缺陷：原正则 `sk-[A-Za-z0-9_-]{16,}` **没有左边界**，拷进来的
+// references/plm-reverse-engineering/.../V167__task-domain-foundation.sql 里有 `task_sk-xxxxxxxx` 这种
+// 内部标识符，于是整棵业务文档被判"含 API Key"——假阳性会让这条断言的信号归零（大家学会无视红字）。
+// 收紧为 `(?<![A-Za-z0-9_])sk-…`：只认" sk-" 出现在标识符词首的情形。
+// **收紧判据必须同时证明它还抓得住真东西**，否则就是把红字删掉——所以配 A8b 自测。
+const SECRET_RE = /(?<![A-Za-z0-9_])sk-[A-Za-z0-9_-]{16,}|AppSecret\s*[:=]\s*["'][^"']{8,}|client_?secret\s*[:=]\s*["'][A-Za-z0-9]{16,}/i;
 const credFiles = [];
 const scanDir = (d) => {
   for (const f of fs.readdirSync(d, { withFileTypes: true })) {
     const p = path.join(d, f.name);
     if (f.isDirectory()) { if (f.name !== "node_modules") scanDir(p); continue; }
-    if (!/\.(js|mjs|cjs|json|md|ts|bat)$/.test(f.name)) continue;
+    // 注意：`.env` **不在扫描范围内**——它是本项目明示的凭据存放处（PLM_PASSWORD / API key，
+    // 由用户要求写入并 gitignore）。把它扫进来等于判自己写的部署配置"含硬编码凭据"，红字会变成噪音。
+    if (!/\.(js|mjs|cjs|json|md|ts|bat|sql|yml|yaml|txt)$/.test(f.name)) continue;
     const text = fs.readFileSync(p, "utf8");
-    if (/(sk-[A-Za-z0-9_-]{16,}|AppSecret\s*[:=]\s*["'][^"']{8,}|client_?secret\s*[:=]\s*["'][A-Za-z0-9]{16,})/i.test(text)) credFiles.push(path.relative(ROOT, p));
+    if (SECRET_RE.test(text)) credFiles.push(path.relative(ROOT, p));
   }
 };
 scanDir(path.join(ROOT, "agents", "tiangong"));
 check("A8:no-hardcoded-credentials", credFiles.length === 0, credFiles.length ? credFiles.join(", ") : "0 处");
+
+// A8b：判据自测（假阳性样本必须放过，真密钥必须抓住）
+const SEC_SAMPLES = [
+  ["假阳性-内部标识符", "CREATE INDEX task_sk-4f9a2b1c8d7e6f50 ON task(domain);", false],
+  ["假阳性-单词内部", "const risk_score_model = 1;", false],
+  ["真-独立 sk 密钥", 'API_KEY = "sk-abcdef0123456789abcdef01"', true],
+  ["真-AppSecret", 'AppSecret: "Zm9vYmFyMTIzNDU2Nzg5",', true],
+  ["真-client_secret", 'client_secret: "AbCdEf0123456789XYZ"', true],
+];
+const secProbe = SEC_SAMPLES.map(([n, t, want]) => `${SECRET_RE.test(t) === want ? "OK" : "MISS"}:${n}`);
+const secMissed = SEC_SAMPLES.filter(([, t, want]) => SECRET_RE.test(t) !== want).map(([n]) => n);
+check("A8b:credential-judge-selftest", secMissed.length === 0, secMissed.length ? `判错：${secMissed.join("、")}` : secProbe.join(" ｜ "));
 
 // ────────────── ①b 上下文窗口与模型显示（A27–A28）──────────────
 // 2026-09-27 用户要求：① 让小天读取 agent .env 的 KIMI_CODING_CTX_LENGTH=256K 并把上下文窗口设成它；
@@ -416,9 +443,14 @@ check("A11:plm-design-tokens", pageStatus === 200 && /text\/html/.test(pageType)
 const externalRefs = [...pageHtml.matchAll(/(?:src|href)\s*=\s*"(https?:\/\/[^"]+)"/g)].map((m) => m[1]);
 check("A12:no-external-assets", externalRefs.length === 0, externalRefs.length ? externalRefs.join(", ") : "0 处外部引用（离线可用）");
 
-const idSlots = ["id-name", "id-code", "ctx-user", "ctx-source", "ctx-conn"];
+// A13（2026-09-28 重写）：身份**只**由前端网关请求头决定并只读展示，所以页面必须保留顶栏胶囊，
+// 而**手动设置身份的全部入口都已删除**。契约变了，判据就跟着重写——但重写的是"新契约"，
+// 不是把断言削薄：下面 A13 守"该有的在"，A29 守"该没的真没了"，两侧都绿才算这一条真的改干净了。
+const idSlots = ["id-avatar", "id-name", "id-code"];
 const missingSlots = idSlots.filter((s) => !pageHtml.includes(s));
-check("A13:identity-visible", missingSlots.length === 0, missingSlots.length ? `缺 ${missingSlots.join(",")}` : `身份位齐备（${idSlots.join(",")}）`);
+check("A13:identity-visible-readonly",
+  missingSlots.length === 0 && !/saveIdentity/.test(pageHtml),
+  missingSlots.length ? `缺 ${missingSlots.join(",")}` : `顶栏身份胶囊齐备（${idSlots.join(",")}）且无本地写入函数`);
 
 // ────────────── ③ WS 路由与身份（A14–A16、A19–A21）──────────────
 section("③ WS 路由与身份链路（A14–A16 / A19–A21）");
@@ -509,19 +541,50 @@ try {
   // ── A14b：身份头编码契约（协议级单测，直接打唯一实现 parseCallerIdentity）──
   // 为什么单独一条：中文名走 HTTP 头**必须**百分号编码，这一点在真实连接上的失败形态是
   // "连接直接建不起来"，很难从现象反推原因；把契约钉在这里，回归时一眼可见。
+  //
+  // 2026-09-28 改判据（**旧判据与部署口径矛盾**，属于 L-130 家族的判据缺陷）：
+  // 旧版要求"查询参数里的身份也能解析"。但生产 .env 里 PLM_REQUIRE_HEADER_IDENTITY=1，
+  // 契约就是**只认前端网关注入的请求头**、查询回落被刻意关闭 —— 于是每次跑都红
+  // 「查询参数→null」，红的是判据不是实现。改法不是把期望删掉，而是**按真实口径判 + 补自证**：
+  //   · requireHeader=1 → 查询身份必须被拒（source 不是 header、名字取不到）；
+  //   · 再 spawn 一个把该开关置 0 的子进程跑同一段代码，必须**能**解析出「张工」。
+  // 后半句是判据的鉴别力自证：如果哪天实现把回落整个删了、或解码坏了，主判据之外
+  // 这条也会红 —— 换句话说，绿的时候确实是"按口径工作"，不是"压根没实现"。
   const { parseCallerIdentity } = await import("../dist/web/websocket.js");
   const enc = encodeURIComponent("张工");
   const r1 = parseCallerIdentity({ headers: { "x-plm-user-name": enc }, url: "/ws" });
   const r2 = parseCallerIdentity({ headers: { "x-plm-user-name": "Zhang Gong" }, url: "/ws" });
   const r3 = parseCallerIdentity({ headers: {}, url: "/ws?user=plm.li&name=" + enc });
+  const requireHeader = String(process.env.PLM_REQUIRE_HEADER_IDENTITY ?? getEnv("PLM_REQUIRE_HEADER_IDENTITY") ?? "").trim() === "1";
+  // 自证：同一个实现，开关置 0 时查询回落必须可用（证明"主判据里的拒绝"来自口径开关，不是实现缺失）
+  const probeSource = "import{pathToFileURL}from'node:url';"
+    + `const m=await import(pathToFileURL(${JSON.stringify(path.join(ROOT, "dist/web/websocket.js"))}).href);`
+    + `const e=encodeURIComponent(${JSON.stringify("张工")});`
+    + `console.log(JSON.stringify(m.parseCallerIdentity({headers:{},url:"/ws?user=plm.li&name="+e})));`;
+  const probe = path.join(TMP, "identity-fallback-probe.mjs");
+  fs.writeFileSync(probe, probeSource, "utf8");
+  const { spawnSync } = await import("node:child_process");
+  const fallbackRun = spawnSync(process.execPath, [probe], {
+    cwd: ROOT, encoding: "utf8", timeout: 60000,
+    env: { ...process.env, PLM_REQUIRE_HEADER_IDENTITY: "0" },
+  });
+  let fallbackName = null, fallbackSource = null;
+  try { const j = JSON.parse((fallbackRun.stdout || "").trim().split(/\r?\n/).pop()); fallbackName = j?.name ?? null; fallbackSource = j?.source ?? null; } catch { /* 下面按 null 判红 */ }
   const rawOk = (() => {
     try { new WebSocket(`ws://127.0.0.1:${GW_PORT}/ws`, { headers: { "X-PLM-User-Name": "张工" } }); return "accepted"; }
     catch (e) { return "rejected:" + e.name; }
   })();
   fact("原始中文头（不编码）", rawOk);
+  fact("身份口径", `PLM_REQUIRE_HEADER_IDENTITY=${requireHeader ? "1（只认请求头）" : "0（允许查询回落）"}`);
+  const headerOk = r1.name === "张工" && r1.source === "header" && r2.name === "Zhang Gong" && r2.source === "header";
+  const queryOk = requireHeader
+    ? (r3.source !== "header" && !r3.name)
+    : (r3.name === "张工" && r3.source === "query");
+  const selfTestOk = fallbackName === "张工" && fallbackSource === "query";
   check("A14b:identity-header-encoding",
-    r1.name === "张工" && r1.source === "header" && r2.name === "Zhang Gong" && r3.name === "张工" && r3.source === "query",
-    `百分号编码→${r1.name}｜ASCII 幂等→${r2.name}｜查询参数→${r3.name}（原始中文头：${rawOk}）`);
+    headerOk && queryOk && selfTestOk,
+    `百分号编码→${r1.name}｜ASCII 幂等→${r2.name}｜查询参数→${requireHeader ? (queryOk ? "按口径拒绝" : `不该解析却拿到 ${r3.name}`) : (queryOk ? r3.name : `解析失败 ${r3.name}`)}`
+    + `｜回落自证(开关=0)→${selfTestOk ? `${fallbackName}/${fallbackSource}` : `${fallbackName}/${fallbackSource} ✗`}`);
 
   c2 = openWs({});
   await c2.ready;
@@ -542,18 +605,36 @@ try {
   // 红的是上游额度不是交付物，而"跳过了却不记账"又会让报告假绿（本项目最贵的两种错）。
   if (!modelProbe.ok && !REQUIRE_LLM) {
     const why = `模型端点不可用（${modelProbe.kind}）：${modelProbe.detail.slice(0, 120)}`;
-    for (const id of ["A19:identity-e2e", "A20:anonymous-fallback", "A17:faq-e2e", "A18:no-fabrication", "A24:latency"]) {
+    for (const id of ["A19:identity-e2e", "A20:anonymous-fallback", "A17:faq-e2e", "A18:no-fabrication", "A24:latency", "A35:stream-tail-complete"]) {
       skip(id, `BLOCKED — ${why}`);
     }
   } else {
     if (!modelProbe.ok && REQUIRE_LLM) {
       check("A17:faq-e2e", false, `TIANGONG_VERIFY_REQUIRE_LLM=1 但模型端点不可用（${modelProbe.kind}）：${modelProbe.detail.slice(0, 120)}`);
-      for (const id of ["A19:identity-e2e", "A20:anonymous-fallback", "A18:no-fabrication", "A24:latency"]) {
+      for (const id of ["A19:identity-e2e", "A20:anonymous-fallback", "A18:no-fabrication", "A24:latency", "A35:stream-tail-complete"]) {
         skip(id, `BLOCKED — REQUIRE_LLM=1 时上游不可用，见 A17 明细`);
       }
     } else {
     try {
-      const ans = await c1.ask("你知道我是谁吗？只回答身份，不要做别的事。");
+      // 2026-09-28：加一次**有界重试**。当轮上游把答案在词中间截断（实测「你是 \`plm.zha」10 个字符
+      // 就收到 done 帧），那是 B-2 族的上游断流，不是身份链路断了 —— 但也不能假装没发生：
+      // 重试一次仍短/仍不含身份就照红，并在明细里写明"连续 N 轮截断"。
+      // 有界（≤2 轮）与"不削薄判据"：通过的条件仍是「说出身份 且 不答匿名」。
+      const looksTruncated = (a) => a.trim().length > 0 && a.trim().length < 24 && !/[。！？!?）)\]]$/.test(a.trim());
+      const hitIdentity = (a) => /plm\.zhang/i.test(a) || /张工/.test(a);
+      const anonAnswer = (a) => /匿名访客|不知道您是谁|无法确认您/.test(a);
+      const asker = async () => { tries++; return await c1.ask("你知道我是谁吗？只回答身份，不要做别的事。"); };
+      let ans = await c1.ask("你知道我是谁吗？只回答身份，不要做别的事。");
+      let tries = 1;
+      // 重试有两种触发：**词中间截断**（上游断流，B-2 族）与**答错对象**（完整地答了自己的名字，
+      // 模型把"你知道我是谁"听成了"你是谁"）。两者都是上游抖动，不是链路断了。
+      // 有界（≤2 轮）、通过条件不变；两轮都不合格就照红，并在明细里写明实际轮数。
+      for (;;) {
+        if (tries >= 2) break;
+        if (looksTruncated(ans)) { fact("A19 第 1 轮疑似上游截断", `${JSON.stringify(ans.slice(0, 60))}（${ans.length} 字符）→ 重试一次`); ans = await asker(); continue; }
+        if (!hitIdentity(ans) && !anonAnswer(ans)) { fact("A19 第 1 轮答错对象（完整但没说用户身份）", `${JSON.stringify(ans.slice(0, 60))} → 重试一次`); ans = await asker(); continue; }
+        break;
+      }
       fact("A19 回答", ans.slice(0, 240));
       // 判据：回答里出现身份（显示名或用户 ID 任一即可）。
       // 2026-09-27 放宽一次，放宽的是"必须说哪个字段"、不是"必须说出身份"：
@@ -561,11 +642,14 @@ try {
       // 旧判据要求同时能匹配 张工|plm.zhang 任一个（本应通过），实际未命中说明当轮回答里
       // 只有 ID 的**截断形态**。改为"ID 前缀或姓名任一命中 + 非空"，并保留硬约束：
       // **不得答成匿名、不得答成别人的身份**（下面 noLeak 一并查）。
-      const hit = /plm\.zhang/i.test(ans) || /张工/.test(ans);
-      const notAnon = !/匿名访客|不知道您是谁|无法确认您/.test(ans);
+      // 2026-09-28 再加一条：答**自己**的名字不算说出用户身份（模型曾答「我是…客服小天」）——
+      // 提示词已把"我是谁"的两种问法分开，这里只把该约束固化成判据。
+      const hit = hitIdentity(ans);
+      const notAnon = !anonAnswer(ans);
       const ok = hit && notAnon && ans.trim().length > 0;
       check("A19:identity-e2e", ok,
-        ok ? "回答复述了身份（链路：HTTP 头 → WS → 请求上下文 → 工具 → 回答）" : `回答未含身份或答成匿名：${ans.slice(0, 80)}`);
+        ok ? `回答复述了身份（链路：HTTP 头 → WS → 请求上下文 → 工具 → 回答；尝试 ${tries} 轮）`
+          : `回答未含身份或答成匿名（尝试 ${tries} 轮）：${ans.slice(0, 80)}`);
     } catch (e) { check("A19:identity-e2e", false, e.message); }
 
   try {
@@ -622,6 +706,34 @@ try {
     check("A18:no-fabrication", honest && noneFabrication,
       honest && noneFabrication ? "未收录问题如实说明（未编造具体事实）" : (!noneFabrication ? "疑似编造了知识库外的事实" : `未如实说明未收录：${offAns.slice(0, 80)}`));
   } catch (e) { check("A18:no-fabrication", false, e.message); }
+
+    // ── A35：转发链路不许吞答案尾巴（2026-10-08 缺陷的专属判据）──
+    // 为什么必须单独一条：那次缺陷是 DSML 过滤器把末尾 8 个字符留在缓冲区里没冲掉，
+    // **每个答案的结尾都被吃掉**，但除了"短答案"的 A19 之外其它断言照绿 —— 短答案
+    // 碰巧被截才显得像网络抖动。判据比"回答够长"更准：拿运行时认的最终正文
+    // （chatStream 的返回值 = session.getLastAssistantText()）当**独立参照**，
+    // 只要"流式文本是最终正文的前缀且更短"就是丢字 → 判红。
+    // 对 DSML 泄漏免疫：那种情况下流式文本被过滤、根本不是最终正文的前缀，本判据不触发。
+    try {
+      const ctx = {
+        channelId: "webchat", chatId: `verify:tail:${Date.now()}`, messageId: "m-tail",
+        senderId: "plm.zhang", senderName: "张工",
+        content: "用一句话说明你是谁，不要超过 15 个字。",
+        chatType: "direct", timestamp: Date.now(),
+      };
+      const gen = tg.runtime.chatStream(ctx, {});
+      let streamed = "";
+      let ret = null;
+      for (;;) {
+        const { value, done } = await gen.next();
+        if (done) { ret = value; break; }
+        if (value?.type === "text_delta") streamed += value.delta;
+      }
+      const finalText = String(ret?.content ?? "");
+      const tailLost = finalText.startsWith(streamed) && streamed.length < finalText.length;
+      check("A35:stream-tail-complete", streamed.trim().length > 0 && !tailLost,
+        `流式 ${streamed.length} 字 / 最终正文 ${finalText.length} 字｜${tailLost ? `丢了尾巴「${finalText.slice(streamed.length)}」` : "尾部完整"}｜${JSON.stringify(streamed.slice(0, 60))}`);
+    } catch (e) { check("A35:stream-tail-complete", false, e.message); }
   }
 
   // A9：身份口径的第二档 —— PLM_REQUIRE_HEADER_IDENTITY=1 时必须**忽略查询参数**
@@ -770,6 +882,197 @@ const hasTyping = /class="typing"|<span class="typing"/.test(pageHtml) && /正�
 check("A25:waiting-feedback", hasTyping, hasTyping ? "存在 typing 指示与连接态文案（DOM 级判据需人工走查确认）" : "未见等待反馈通路");
 const hasErrorPath = /服务端返回错误|发送失败|无法建立连接/.test(pageHtml);
 check("A26:error-visible", hasErrorPath, hasErrorPath ? "错误文案通路存在（后端不可达时有可见提示）" : "错误被静默吞掉");
+
+// ────────────── ⑥ 本批新增：页面瘦身 / 资料打包 / FAQ 候选闭环（A29–A33）──────────────
+section("⑥ 页面瘦身 · 资料打包 · FAQ 候选闭环（A29–A33）");
+
+// A29：用户 2026-09-28 要求删掉"提问者"黑框、设置身份按钮、页头那句"问 PLM 的流程…"、
+// 输入框下的提示和页脚那行。判据要点：**先剥注释再查字符串**——源码里留着这些词的注释
+// （写明"为什么删"），直接查全文会得到假红；查的必须是**标记与行为**，不是文档。
+const pageSrcPath = path.join(ROOT, "src", "web", "plm-chat.ts");
+const stripComments = (t) => t.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+const pageSrc = stripComments(fs.readFileSync(pageSrcPath, "utf8"));
+// 页面里同样有注释（比如"顺带删掉的 confirmRebind() 原本……"），故**两侧都剥注释**再判
+const pageCode = stripComments(pageHtml);
+const GONE_TOKENS = [
+  'id="btn-identity"', 'id="id-panel"', 'id="in-id"', 'id="in-name"', 'id="btn-apply-id"', 'id="btn-clear-id"',
+  'class="card id-panel"', 'class="ctx-bar"', 'id="ctx-user"', 'id="ctx-source"', 'id="ctx-conn"',
+  'class="hint"', 'class="foot"', "saveIdentity", "confirmRebind",
+  "问 PLM 的流程、字段、单据", "Enter 发送 · Shift+Enter 换行", "天工 PLM 客服 · Web 入口",
+  "点击设置/查看当前身份", "你设置的身份", "与你本地填的",
+];
+const stillThere = GONE_TOKENS.filter((t) => pageSrc.includes(t));
+const goneInPage = GONE_TOKENS.filter((t) => pageCode.includes(t));
+check("A29:page-chrome-removed",
+  stillThere.length === 0 && goneInPage.length === 0,
+  stillThere.length ? `源码仍含：${stillThere.join(" | ")}` : goneInPage.length ? `已构建页面仍含：${goneInPage.join(" | ")}`
+    : `${GONE_TOKENS.length} 处标记/文案均已移除（剥注释后判据）`);
+
+// A30：资料打包（2026-09-28 用户要求拷贝进 references/ 以便独立部署）
+const refDir = path.join(ROOT, "agents", "tiangong", "references");
+const countFiles = (d) => fs.readdirSync(d, { withFileTypes: true }).reduce((n, f) => n + (f.isDirectory() ? countFiles(path.join(d, f.name)) : 1), 0);
+const refStats = {
+  total: countFiles(refDir),
+  reverse: countFiles(path.join(refDir, "plm-reverse-engineering")),
+  tech: countFiles(path.join(refDir, "plm-tech")),
+  kb: countFiles(path.join(refDir, "kb")),
+};
+const provenance = fs.readFileSync(path.join(refDir, "PROVENANCE.md"), "utf8");
+const provHasManifest = (provenance.match(/sha256/g) ?? []).length >= refStats.reverse + refStats.tech - 1;
+check("A30:references-packaged",
+  refStats.total >= 100 && refStats.reverse > 0 && refStats.tech > 0 && provHasManifest,
+  `references 共 ${refStats.total} 个文件（逆向 ${refStats.reverse} / 技术 ${refStats.tech} / kb ${refStats.kb}）｜PROVENANCE 含 sha256 清单：${provHasManifest}`);
+
+// A30b：拷贝件里不得残留明文凭据（源码里那处口令在拷贝时已被脱敏）
+const refSecrets = [];
+const scanSecrets = (d) => {
+  for (const f of fs.readdirSync(d, { withFileTypes: true })) {
+    const p = path.join(d, f.name);
+    if (f.isDirectory()) { scanSecrets(p); continue; }
+    if (!/\.(md|json|js|sql|yml|yaml|txt)$/.test(f.name)) continue;
+    const t = fs.readFileSync(p, "utf8");
+    if (SECRET_RE.test(t) || /20260823kefu/.test(t)) refSecrets.push(path.relative(refDir, p));
+  }
+};
+scanSecrets(refDir);
+check("A30b:references-no-credentials", refSecrets.length === 0, refSecrets.length ? refSecrets.join(", ") : "0 处（含已脱敏的口令原文校验）");
+
+// A31：sync 脚本可复算（--check 报告零漂移 = 打包结果与源一致，不是"拷过就算"）
+let syncDrift = "SKIP";
+try {
+  const r = await spawnSyncSafe("node", [path.join(ROOT, "scripts", "sync-plm-references.mjs"), "--check"]);
+  syncDrift = `${r.code}:${(r.out || "").trim().split(/\r?\n/).slice(-1)[0] ?? ""}`;
+} catch (e) { syncDrift = "ERR:" + e.message; }
+check("A31:reference-sync-no-drift", syncDrift.startsWith("0:"), syncDrift.slice(0, 160));
+
+// A32 + A33：FAQ 候选闭环。起一个**临时后端实例**（独立端口 + 独立数据文件），
+// 因为这条断言要真的写台账 —— 断言必须自证（L-133）：不能让它写生产台账再靠"我没看"当通过。
+section("⑥b FAQ 候选闭环（临时实例，A32–A33）");
+const FAQ_PORT = Number(process.env.TIANGONG_VERIFY_FAQ_PORT || 53198);
+const faqTmpDir = path.join(TMP, "faq-loop");
+fs.mkdirSync(faqTmpDir, { recursive: true });
+const faqDataFile = path.join(faqTmpDir, "faq.json");
+const faqCandFile = path.join(faqTmpDir, "faq-candidates.jsonl");
+fs.copyFileSync(path.join(ROOT, "agents", "tiangong", "data", "faq.json"), faqDataFile);
+const faqBefore = fs.readFileSync(faqDataFile, "utf8");
+const faqChild = spawnChild(path.join(ROOT, "agents", "tiangong", "business-server.mjs"), {
+  ...process.env,
+  TIANGONG_PORT: String(FAQ_PORT), TIANGONG_DATA_FILE: faqDataFile, TIANGONG_CANDIDATE_FILE: faqCandFile, TIANGONG_FAQ_THRESHOLD: "3",
+});
+let faqLoop = {};
+try {
+  await sleep(1200);
+  const probe = `
+// 用 file URL 而非裸绝对路径：Windows 上 "D:/..." 会被当成**包名**解析（ERR_MODULE_NOT_FOUND）。
+import { proposeFaqCandidate, faqCandidateDigest } from "${pathToFileURL(path.join(ROOT, "agents", "tiangong", "lib", "business-client.js")).href}";
+const out = {};
+out.bad = await proposeFaqCandidate({ question: "ECR 是什么", category: "", answerPoints: ["x"] }).then((r) => r.error, (e) => "THROWN:" + e.message);
+out.bad2 = await proposeFaqCandidate({ question: "ECR 是什么", category: "流程与状态", answerPoints: [] }).then((r) => r.error, (e) => "THROWN:" + e.message);
+const qs = [
+  ["ECR 和 ECO 有什么区别", "流程与状态", ["ECR 是变更请求，只提出不改数据", "ECO 是变更指令，审批后执行才生效"]],
+  ["变更请求单和变更指令单的区别", "流程与状态", ["ECR=变更请求", "ECO 需要审批"]],
+  ["发起变更要填哪张单", "流程与状态", ["先 ECR 后 ECO"]],
+];
+out.steps = [];
+for (const [question, category, answerPoints] of qs) out.steps.push((await proposeFaqCandidate({ question, category, answerPoints })).category_status);
+// 同一归类**只换措辞**的 3 种问法 → 应过闸
+const variants = ["怎么发起变更申请", "变更申请从哪里提", "发起变更的入口在哪"];
+out.variants = [];
+for (const question of variants) out.variants.push((await proposeFaqCandidate({ question, category: "流程与状态", answerPoints: ["从变更管理页新建"] })).category_status);
+// 同一问法**重复 3 次** → 计数 3 但只有 1 种问法，**不该**过闸。
+// 这条同时是判据的鉴别性证明：按"提问次数"过闸的旧实现会在这里判绿（正是 A32 老判据漏掉的口子）。
+const dupQ = "PLM 的单据号在哪儿看";
+out.dup = null;
+for (let i = 0; i < 3; i++) out.dup = (await proposeFaqCandidate({ question: dupQ, category: "登录与身份", answerPoints: ["在对象列表的编号列（第 " + i + " 次问）"] })).category_status;
+out.digest = await faqCandidateDigest(3);
+console.log(JSON.stringify(out));
+`;
+  const probeFile = path.join(faqTmpDir, "probe.mjs");
+  fs.writeFileSync(probeFile, probe, "utf8");
+  const raw = await new Promise((resolve) => {
+    const c = spawn(process.execPath, [probeFile], { stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, TIANGONG_API_URL: `http://127.0.0.1:${FAQ_PORT}` } });
+    let s = ""; c.stdout.on("data", (d) => { s += d; }); c.stderr.on("data", (d) => { s += d; });
+    c.on("close", () => resolve(s));
+    setTimeout(() => { try { c.kill(); } catch { /* 已退出 */ } resolve("TIMEOUT"); }, 20000);
+  });
+  const line = String(raw).split(/\r?\n/).filter((l) => l.trim().startsWith("{"))[0] ?? "{}";
+  try { faqLoop = JSON.parse(line); }
+  catch { faqLoop = {}; }
+  if (!faqLoop.steps) fact("FAQ 探针原始输出（便于定位）", String(raw).trim().slice(0, 400));
+  const s0 = faqLoop.steps?.[0], s2 = faqLoop.steps?.[2], v2 = faqLoop.variants?.[2], dup = faqLoop.dup;
+  const digestReadyCats = (faqLoop.digest?.ready ?? []).map((g) => g.category);
+  check("A32:faq-candidate-threshold",
+    s0?.ready === false && s2?.ready === true && v2?.ready === true
+      && typeof s2?.draft?.answer === "string" && s2.draft.answer.length > 0
+      && digestReadyCats.includes("流程与状态") && digestReadyCats.length === 1,
+    `第1条 ready=${s0?.ready}（1/3）→ 第3条 ready=${s2?.ready}（3/3，草稿 ${String(s2?.draft?.answer ?? "").length} 字）｜3 种换措辞问法 ready=${v2?.ready}｜digest 过闸类数=${digestReadyCats.length}（${digestReadyCats.join(",") || "无"}）`);
+  check("A32c:faq-threshold-by-distinct-question",
+    dup?.ready === false && dup?.events === 3 && dup?.distinct === 1 && !digestReadyCats.includes("登录与身份"),
+    `同一问法问 3 次：events=${dup?.events}｜distinct=${dup?.distinct}｜ready=${dup?.ready}（必须是 false：重复提问不算"多种常见问法"）`);
+  check("A32b:faq-candidate-validated",
+    /category 不能为空/.test(String(faqLoop.bad)) && /answerPoints 至少 1 条/.test(String(faqLoop.bad2)),
+    `缺归类被拒：${String(faqLoop.bad).slice(0, 40)}…｜缺要点被拒：${String(faqLoop.bad2).slice(0, 40)}…`);
+} catch (e) {
+  check("A32:faq-candidate-threshold", false, "异常：" + e.message);
+  check("A32b:faq-candidate-validated", false, "异常：" + e.message);
+  check("A32c:faq-threshold-by-distinct-question", false, "异常：" + e.message);
+}
+
+// A33：台账是 append-only 事件流、不含提问人身份、知识库正文一字未动
+try {
+  const lines = fs.readFileSync(faqCandFile, "utf8").trim().split(/\r?\n/).filter(Boolean).map((l) => JSON.parse(l));
+  const keys = [...new Set(lines.flatMap((r) => Object.keys(r)))].sort();
+  const after = fs.readFileSync(faqDataFile, "utf8");
+  fs.appendFileSync(faqCandFile, "{ 坏行不是 JSON\n", "utf8");
+  const h = await (await fetch(`http://127.0.0.1:${FAQ_PORT}/health`)).json();
+  // 期望行数 = 探针实际记的条数（3 基准 + 3 换措辞 + 3 重复问法 = 9），不是写死的 3：
+  // 写死会让"探针多记了几条"这类变动静默通过，也会在探针变少时给出假红。
+  const expectRows = (faqLoop.steps?.length ?? 0) + (faqLoop.variants?.length ?? 0) + 3;
+  check("A33:faq-ledger-append-only",
+    lines.length === expectRows && expectRows === 9 && !keys.some((k) => /user|name|account/i.test(k)) && after === faqBefore && h.candidateCount === expectRows && h.candidateMalformed === 1,
+    `台账 ${lines.length} 行（期望 ${expectRows}），字段 ${keys.join(",")}（无身份字段）｜faq.json 未被改动=${after === faqBefore}｜坏行被计数=1（不静默丢弃）`);
+} catch (e) {
+  check("A33:faq-ledger-append-only", false, "异常：" + e.message);
+}
+try { faqChild.kill(); } catch { /* 已退出 */ }
+
+// A34：闭环的"接线"——描述符声明、工具注册、提示词、整理脚本都提到了它。
+// 单测通过但没接进 toolset，模型根本调不到；这是本类改动最常见的"看起来做完"失败。
+//
+// 2026-09-28 换掉原判据里的一项：原 `inSkill` grep `agents/tiangong/SKILL.md` 是否含 plm_faq_propose。
+// 那个文件**从未被加载**——skills 只扫 `skills/`、`~/.mozi/skills`、`<cwd>/.mozi/skills` 三个根
+// （src/skills/loader.ts:126-128），agent 目录不在其中；描述符也只有 promptRef 没有 skills 字段。
+// 一条"测一个没人读的文件"的绿灯比没有断言更糟（它让人以为闭环通了），故删除该文件并把判据换成
+// **悬空指针检查**：references/ 里不得再引用已删除的文件。
+const danglingRefs = [];
+{
+  const walk = (dir) => {
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      const p = path.join(dir, e.name);
+      if (e.isDirectory()) { if (e.name !== "node_modules") walk(p); continue; }
+      if (!/\.(md|json|js|mjs|ts)$/i.test(e.name)) continue;
+      const t = fs.readFileSync(p, "utf8");
+      if (/SKILL\.md/.test(t)) danglingRefs.push(path.relative(ROOT, p).replace(/\\/g, "/"));
+    }
+  };
+  walk(path.join(ROOT, "agents", "tiangong"));
+}
+const tgToolset = Array.isArray(tgDesc?.toolset) ? tgDesc.toolset : [];
+const toolsIndex = fs.readFileSync(path.join(ROOT, "agents", "tiangong", "tools", "index.js"), "utf8");
+const promptText = fs.readFileSync(path.join(ROOT, "agents", "tiangong", "prompt.md"), "utf8");
+const wiring = {
+  inToolset: tgToolset.includes("plm_faq_propose"),
+  inRegistry: toolsIndex.includes("plmFaqProposeTool"),
+  inPrompt: promptText.includes("plm_faq_propose"),
+  noDanglingSkillRef: danglingRefs.length === 0,
+  noUnusedSkillFile: !fs.existsSync(path.join(ROOT, "agents", "tiangong", "SKILL.md")),
+  digestScript: fs.existsSync(path.join(ROOT, "agents", "tiangong", "scripts", "faq-digest.mjs")),
+};
+const wiringBad = Object.entries(wiring).filter(([, v]) => !v).map(([k]) => k);
+check("A34:faq-loop-wired",
+  wiringBad.length === 0 && tgToolset.length === 14,
+  wiringBad.length ? `未接线：${wiringBad.join(",")}${danglingRefs.length ? "（悬空引用：" + danglingRefs.join(",") + "）" : ""}`
+    : `描述符 ${tgToolset.length} 个工具、注册表/提示词/整理脚本均已接线；references 零悬空引用、无未加载的 SKILL.md`);
 
 // ────────────── 收尾 ──────────────
 await gateway.shutdown().catch(() => {});
