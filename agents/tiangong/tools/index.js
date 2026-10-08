@@ -7,7 +7,12 @@
 //   ② 需求填写族：`plm_check_env` / `plm_whoami_plm` / `plm_list_projects` / `plm_list_classes` /
 //      `plm_list_requirements` / `plm_get_requirement` / `plm_dedup_requirement` /
 //      `plm_submit_requirement`（唯一会改动 PLM 数据的工具，默认 dry-run）/ `plm_track_requirements`
-//   ③ 客服事实与身份观测：`plm_faq_search` / `plm_get_current_time` / `plm_whoami`
+//   ③ 客服事实与身份观测：`plm_faq_search` / `plm_faq_propose` / `plm_get_current_time` / `plm_whoami`
+//
+// 唯一新增的写工具 `plm_faq_propose`（2026-09-28，用户要求"自己归类总结客户常见、类似问题形成 FAQ 清单"）：
+//   它只往知识库后端的**候选台账**追加一行，既不是文件也不是代码，更碰不到 faq.json。
+//   ——"去掉写文件工具"的诉求是"别让客服 agent 自己改事实源"，而不是"任何写入都算违规"。
+//   候选台账记的是发生过的事件，FAQ 草稿由人核对后并入，两段之间隔着阈值闸门。
 //
 // pi 的内置编码工具（read / write / edit / bash / glob / grep / ls…）由装配期的
 // `noTools: "builtin"` 关闭（见 runtime.ts）—— 所以"删掉写文件工具"不是靠提示词自律，
@@ -33,6 +38,7 @@ export const tools = [
 
   // ③ 客服事实与身份观测
   (await import("./plm-faq-search.js")).plmFaqSearchTool,
+  (await import("./plm-faq-propose.js")).plmFaqProposeTool,
   (await import("./plm-get-current-time.js")).plmGetCurrentTimeTool,
   (await import("./plm-whoami.js")).plmWhoamiTool,
 ];
