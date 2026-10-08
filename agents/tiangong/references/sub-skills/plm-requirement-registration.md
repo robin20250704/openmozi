@@ -5,8 +5,8 @@ description: PLM 客服子技能③——登记操作规程。把已过质量门
 
 # 子技能③：登记操作规程
 
-> 上位机制见 `SKILL.md` §四（查重门/质量门/权限门）与 §七（执行协议）。
-> **实测口径（2026-09-27）**：下文与 `.work/plm-probe/registration-contract.md` 冲突处，**一律以本文件（= 事实源 `SKILL.md`）为准**——该勘验报告在"登记不挂项目也行""`verification` 可用"等处已被实测否证。
+> 上位机制见 `prompt.md` §四（需求线：查重门 / 质量门四元输出 / dry-run 与落库闸门）与 §六（权限与红线）。
+> **实测口径（2026-09-27）**：下文与 `.work/plm-probe/registration-contract.md` 冲突处，**一律以本文件为准**——该勘验报告在"登记不挂项目也行""`verification` 可用"等处已被实测否证。
 
 ## 一、登记前置检查清单（缺一不登记）
 
@@ -74,7 +74,7 @@ node .dsh/skills/creature-plm-customer-service/references/tools/plm-req.cjs trac
 | `400 ATTR_INVALID`（如 `REQ.sourceType 非法值: CUSTOMER`） | **两套词表抄混** | 按 §二 词表改正；`check` 的"词表一致性"步会提前报红（服务端元数据 vs 本地常量） |
 | `400 VERIFICATION_REQUIRED` | 填了 `paramValue` 却没给验收准则 | 补验收准则，或去掉 `paramValue` 把量化要求写进正文交给分析人 |
 | `400 DATA_CONFLICT` | `reqClassId` / `parentId` 填了不存在的 id（创建时不做存在性预检，靠 DB 外键兜底） | 用 `classes` 取正确分类 id；`parentId` 用真实存在的需求 id |
-| `403 FORBIDDEN` | 当前身份无 `requirement.create`，或对象级 ABAC | `whoami` 看角色；**不重试**；按 `SKILL.md` §十 的两类 403 文案分路 |
+| `403 FORBIDDEN` | 当前身份无 `requirement.create`，或对象级 ABAC | `whoami` 看角色；**不重试**；按 `prompt.md` §三 的两类 403 文案分路（`403` 权限点 vs `403 超出授权范围`） |
 | `401 UNAUTHORIZED` | token 缺失/过期；或脚本未带 Bearer 直连 | 正常：未带 Bearer 一律 401（**预期行为**）。走 refresh 续期；UAT **禁止 password grant**（`unauthorized_client`） |
 | 浏览器登录超时（"等待 SSO token 超时"） | 证书拦截页挂死 / 表单未渲染 / 站点不可达 | 先 `doctor`（清孤儿浏览器）→ `login --force` → 仍失败**读报错里的 URL 与页面片段**（工具会打印，据此区分"已登录态"与"站点不可达"），再上报 |
 | 卡在**证书拦截页** | 复用了 `:9222` 上**别的 harness 起的** headless Chrome（无 `--ignore-certificate-errors`），UAT 自签证书 ⇒ headless 无人可点 ⇒ **静默挂死** | **绝不复用外部实例**；工具会在专用端口 **9334** 自起（参数与回收都由自己负责）。教训：**"端口在" ≠ "能用"** |
@@ -101,5 +101,5 @@ node .dsh/skills/creature-plm-customer-service/references/tools/plm-req.cjs trac
 - **不代替责任人流转状态**：`PROPOSED→ANALYZED→APPROVED→…` 是**别人**的节拍；本器官**只做登记**与**只读回访**。不批准、不验收、不判定、不签署、不作废（作废不可回退，且属治理动作）。
 - **不改库、不改主数据、不教用户绕过**（手改数据 / 跳过分页筛选 / 跳过评审门 / 挂不相关引用对象）——绕过污染受控证据链（审计是 append-only hash 链），事后无法对账。
 - **不写口令与 token**：`.env` 只提键名；token 只进 `.creature/.cache/plm-session.json`（gitignored，600 权限，只含 token）；**任何产物、终端输出、台账都不得含口令/token 明文**。
-- **不改 `references/tools/`**：工具的行为是实测过的；要改行为先改 `SKILL.md`/`plm-lessons.md` 并留证据。
+- **不改 `references/tools/`**：工具的行为是实测过的；要改行为先改 `prompt.md`/`plm-lessons.md` 并留证据。
 - **爆炸半径意识**：真实写操作只有 `POST /api/v1/requirements` 一件，产物是一条可作废但**不可回退**的 `PROPOSED` 条目 ⇒ 登记前必须已过**查重门 + 质量门**；**宁可这一轮不登记（把草稿留给下一轮补齐证据），也不要落一条要作废的条目**。
